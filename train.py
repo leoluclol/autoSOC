@@ -84,13 +84,13 @@ class MultiBranchLSTMWithAttentionAndTransformer(nn.Module):
     def __init__(self, input_dim_fast, input_dim_slow, hidden_dim, num_layers):
         super(MultiBranchLSTMWithAttentionAndTransformer, self).__init__()
         
-        self.lstm_fast = nn.LSTM(input_dim_fast, hidden_dim, num_layers, batch_first=True)
-        self.lstm_slow = nn.LSTM(input_dim_slow, hidden_dim, num_layers, batch_first=True)
+        self.lstm_fast = nn.LSTM(input_dim_fast, hidden_dim, num_layers=1, batch_first=True)
+        self.lstm_slow = nn.LSTM(input_dim_slow, hidden_dim, num_layers=1, batch_first=True)
         
         self.attention_fast = Attention(hidden_dim)
         self.attention_slow = Attention(hidden_dim)
         
-        self.transformer_layer = nn.TransformerEncoderLayer(d_model=hidden_dim * 2, nhead=4)
+        self.transformer_layer = nn.TransformerEncoderLayer(d_model=hidden_dim * 2, nhead=2)
         self.transformer_encoder = nn.TransformerEncoder(self.transformer_layer, num_layers=1)
         
         self.fc = nn.Linear(hidden_dim * 2, 1)
@@ -134,8 +134,8 @@ def train_and_evaluate():
     # Definizione del modello
     input_dim_fast = X_tr_f.shape[2]
     input_dim_slow = X_tr_s.shape[2]
-    hidden_dim = 128
-    num_layers = 2
+    hidden_dim = 64  # Ridotto da 128 a 64
+    num_layers = 1   # Ridotto il numero di layer
     model = MultiBranchLSTMWithAttentionAndTransformer(input_dim_fast, input_dim_slow, hidden_dim, num_layers).to(device)
     
     # Definizione della loss e dell'ottimizzatore
