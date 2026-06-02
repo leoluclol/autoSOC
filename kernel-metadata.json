@@ -1,0 +1,17 @@
+{
+  "id": "leonardoluchini/autoresearch-battery-soc",
+  "title": "Autoresearch Battery SOC",
+  "code_file": "train.py",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": [
+    "leonardoluchini/calce-a123-dynamic-raw-joined"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}
