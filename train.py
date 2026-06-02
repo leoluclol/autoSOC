@@ -114,10 +114,10 @@ class BatteryMultiBranchNet(nn.Module):
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=3, batch_first=True, dropout=dropout)  # Aumentato il numero di livelli LSTM
         self.drop_fast = nn.Dropout(p=dropout)
 
-        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=3, batch_first=True, dropout=dropout)  # Aumentato il numero di livelli LSTM
         self.drop_slow = nn.Dropout(p=dropout)
 
         self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)

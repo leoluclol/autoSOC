@@ -3,7 +3,7 @@
   "title": "Autoresearch Battery SOC",
   "code_file": "train.py",
   "language": "python",
-  "kernel_type": "notebook",
+  "kernel_type": "script",
   "is_private": "true",
   "enable_gpu": "true",
   "enable_tpu": "false",
