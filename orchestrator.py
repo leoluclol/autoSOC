@@ -67,15 +67,19 @@ def run_kaggle_pipeline():
         
     print("📥 Download dei risultati...")
     run_bash("mkdir -p kaggle_output")
+    # Pulisce i log vecchi per evitare di leggere output di run precedenti
+    run_bash("rm -f ./kaggle_output/run.log") 
+    
+    # Questo comando scarica tutto il contenuto di /kaggle/working/ dentro ./kaggle_output/
     run_bash(f"kaggle kernels output {KAGGLE_USER_SLUG} -p ./kaggle_output")
     
-    # Unisce eventuali log scaricati in un unico file run.log
-    run_bash("cat ./kaggle_output/*.log > run.log")
+    # Il file prodotto dal nostro script train.py si troverà qui:
+    log_path = "./kaggle_output/run.log"
     
-    if os.path.exists("run.log"):
-        return read_file("run.log")
-    return "Errore: run.log non trovato. Il training potrebbe essere crashato prima di produrre output."
-
+    if os.path.exists(log_path):
+        return read_file(log_path)
+    
+    return "Errore: run.log non trovato nella cartella scaricata. Kaggle potrebbe essere andato in Timeout o in OOM prima di avviare Python."
 # ==========================================
 # 4. GESTIONE DELLE METRICHE
 # ==========================================

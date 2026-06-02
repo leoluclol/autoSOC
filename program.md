@@ -26,9 +26,10 @@ Strict Rules (WHAT YOU CANNOT DO)
 
 DO NOT destructively modify the data loading functions (process_and_split_data). The dataset path /kaggle/input/... MUST remain strictly unchanged.
 
-DO NOT modify the print strings at the end of train.py. The local orchestrator reads the output using strict regular expressions. The final lines of your script MUST print exactly:
-test_mae_percent:   [value]
-peak_vram_mb:       [value]
+DO NOT modify the data logging procedure at the end of train.py. Never modify the DualLogger class and these two lines:
+sys.stdout = DualLogger("run.log")
+sys.stderr = sys.stdout
+DO NOT modify the printing of the final evaluation metrics.
 
 The Indefinite Loop
 
