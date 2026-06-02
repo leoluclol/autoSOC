@@ -139,6 +139,8 @@ def main_loop():
         
         # 3. Lanciamo la pipeline su Kaggle
         run_log = run_kaggle_pipeline()
+
+        print(run_log)
         
         # 4. Valutiamo i risultati estraendo le metriche dal log
         test_mae_match = re.search(r"test_mae_percent:\s+([0-9.]+)", run_log)

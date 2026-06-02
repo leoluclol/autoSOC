@@ -80,15 +80,15 @@ class Attention(nn.Module):
         context = (x * alpha.unsqueeze(-1)).sum(dim=1)
         return context, alpha
 
-class MultiBranchLSTMWithAttention(nn.Module):
+class MultiBranchLSTMWithTransformer(nn.Module):
     def __init__(self, input_dim_fast, input_dim_slow, hidden_dim, num_layers):
-        super(MultiBranchLSTMWithAttention, self).__init__()
+        super(MultiBranchLSTMWithTransformer, self).__init__()
         
         self.lstm_fast = nn.LSTM(input_dim_fast, hidden_dim, num_layers=1, batch_first=True)
         self.lstm_slow = nn.LSTM(input_dim_slow, hidden_dim, num_layers=1, batch_first=True)
         
-        self.attention_fast = Attention(hidden_dim)
-        self.attention_slow = Attention(hidden_dim)
+        self.transformer_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=4)
+        self.transformer = nn.TransformerEncoder(self.transformer_layer, num_layers=1)
         
         self.fc = nn.Linear(hidden_dim * 2, 1)
 
@@ -96,10 +96,10 @@ class MultiBranchLSTMWithAttention(nn.Module):
         out_fast, _ = self.lstm_fast(x_fast)
         out_slow, _ = self.lstm_slow(x_slow)
         
-        context_fast, _ = self.attention_fast(out_fast)
-        context_slow, _ = self.attention_slow(out_slow)
+        combined = torch.cat((out_fast, out_slow), dim=1)
+        combined = self.transformer(combined)
         
-        combined = torch.cat((context_fast, context_slow), dim=1)
+        combined = combined.mean(dim=1)  # Pooling over the sequence
         
         out = self.fc(combined)
         return out
@@ -132,7 +132,7 @@ def train_and_evaluate():
     input_dim_slow = X_tr_s.shape[2]
     hidden_dim = 64  # Mantenuto a 64
     num_layers = 1   # Mantenuto a 1
-    model = MultiBranchLSTMWithAttention(input_dim_fast, input_dim_slow, hidden_dim, num_layers).to(device)
+    model = MultiBranchLSTMWithTransformer(input_dim_fast, input_dim_slow, hidden_dim, num_layers).to(device)
     
     # Definizione della loss e dell'ottimizzatore
     criterion = PhysicsInformedBMSLoss(lambda_penalty=0.1)
