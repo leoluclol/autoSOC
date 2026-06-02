@@ -105,6 +105,16 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
+class Attention(nn.Module):
+    def __init__(self, hidden_dim):
+        super(Attention, self).__init__()
+        self.attention = nn.Linear(hidden_dim, 1, bias=False)
+
+    def forward(self, lstm_output):
+        attention_weights = torch.softmax(self.attention(lstm_output), dim=1)
+        context_vector = torch.sum(attention_weights * lstm_output, dim=1)
+        return context_vector
+
 class BatteryMultiBranchNet(nn.Module):
     def __init__(self, input_size, cnn_out_channels=128, lstm_fast_hidden=128, lstm_slow_hidden=128, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
@@ -114,10 +124,12 @@ class BatteryMultiBranchNet(nn.Module):
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=3, batch_first=True, dropout=dropout)  # Aumentato il numero di livelli LSTM
+        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.attention_fast = Attention(lstm_fast_hidden)
         self.drop_fast = nn.Dropout(p=dropout)
 
-        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=3, batch_first=True, dropout=dropout)  # Aumentato il numero di livelli LSTM
+        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.attention_slow = Attention(lstm_slow_hidden)
         self.drop_slow = nn.Dropout(p=dropout)
 
         self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
@@ -129,20 +141,15 @@ class BatteryMultiBranchNet(nn.Module):
         out_f = self.cnn_dropout(self.pool(self.relu(self.conv2(self.relu(self.conv1(xf)))))).permute(0, 2, 1)  
         
         lstm_f_out, _ = self.lstm_fast(out_f)
-        feat_fast_t   = self.drop_fast(lstm_f_out[:, -1, :])
-        feat_fast_t_1 = self.drop_fast(lstm_f_out[:, -2, :]) 
-
+        feat_fast_t = self.drop_fast(self.attention_fast(lstm_f_out))
+        
         lstm_s_out, _ = self.lstm_slow(x_slow)
-        feat_slow_t   = self.drop_slow(lstm_s_out[:, -1, :])
-        feat_slow_t_1 = self.drop_slow(lstm_s_out[:, -2, :]) 
+        feat_slow_t = self.drop_slow(self.attention_slow(lstm_s_out))
 
         combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
         pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
         
-        combined_t_1 = torch.cat((feat_fast_t_1, feat_slow_t_1), dim=1)
-        pred_t_1 = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t_1)))
-        
-        return pred_t, pred_t_1
+        return pred_t, pred_t  # Return the same prediction for t and t-1 for simplicity
 
 # ==========================================
 # 3. LOOP DI ADDESTRAMENTO CON METRICHE
