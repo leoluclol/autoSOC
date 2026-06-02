@@ -116,7 +116,7 @@ class Attention(nn.Module):
         return context_vector
 
 class BatteryMultiBranchNet(nn.Module):
-    def __init__(self, input_size, cnn_out_channels=128, lstm_fast_hidden=128, transformer_hidden=128, nhead=4, num_layers=2, dropout=0.3):
+    def __init__(self, input_size, cnn_out_channels=128, lstm_fast_hidden=128, transformer_hidden=256, nhead=4, num_layers=3, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
         self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(in_channels=cnn_out_channels, out_channels=cnn_out_channels, kernel_size=3, padding=1)
