@@ -87,7 +87,7 @@ class MultiBranchLSTMWithTransformer(nn.Module):
         self.lstm_fast = nn.LSTM(input_dim_fast, hidden_dim, num_layers=1, batch_first=True)
         self.lstm_slow = nn.LSTM(input_dim_slow, hidden_dim, num_layers=1, batch_first=True)
         
-        self.transformer_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=4)
+        self.transformer_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=2)  # Diminuire il numero di teste a 2
         self.transformer = nn.TransformerEncoder(self.transformer_layer, num_layers=1)
         
         self.fc = nn.Linear(hidden_dim * 2, 1)
@@ -124,14 +124,14 @@ def train_and_evaluate():
     train_dataset = TensorDataset(torch.tensor(X_tr_f, dtype=torch.float32), torch.tensor(X_tr_s, dtype=torch.float32), torch.tensor(y_tr, dtype=torch.float32))
     test_dataset = TensorDataset(torch.tensor(X_te_f, dtype=torch.float32), torch.tensor(X_te_s, dtype=torch.float32), torch.tensor(y_te, dtype=torch.float32))
     
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)  # Ridurre la dimensione del batch a 32
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
     
     # Definizione del modello
     input_dim_fast = X_tr_f.shape[2]
     input_dim_slow = X_tr_s.shape[2]
-    hidden_dim = 64  # Mantenuto a 64
-    num_layers = 1   # Mantenuto a 1
+    hidden_dim = 64  # Mantenere a 64
+    num_layers = 1   # Mantenere a 1
     model = MultiBranchLSTMWithTransformer(input_dim_fast, input_dim_slow, hidden_dim, num_layers).to(device)
     
     # Definizione della loss e dell'ottimizzatore
