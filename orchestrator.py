@@ -152,7 +152,7 @@ def main_loop():
         if current_mae == 0.0:
             status = "crash"
             print("❌ Il training su Kaggle è andato in crash.")
-            run_bash("git reset HEAD~1 --hard") # Rollback immediato
+            # run_bash("git reset HEAD~1 --hard") # Rollback immediato
         elif current_mae < best_mae:
             status = "keep"
             print(f"✅ MIGLIORAMENTO! Nuovo MAE: {current_mae} (precedente: {best_mae})")

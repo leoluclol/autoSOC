@@ -1,5 +1,5 @@
 """
-Autoresearch pretraining script per LSTM Multi-Branch (PINN).
+Autoresearch pretraining script per LSTM Multi-Branch (PINN) con Attention e Transformer.
 Script unificato, ottimizzato per l'esecuzione su Kaggle Cloud.
 """
 
@@ -68,124 +68,111 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
 # ==========================================
 # 2. DEFINIZIONE DEL MODELLO E DELLA LOSS
 # ==========================================
+class Attention(nn.Module):
+    def __init__(self, input_dim):
+        super(Attention, self).__init__()
+        self.attention_weights = nn.Parameter(torch.Tensor(input_dim, 1))
+        nn.init.xavier_uniform_(self.attention_weights)
+
+    def forward(self, x):
+        scores = torch.matmul(x, self.attention_weights).squeeze(-1)
+        alpha = torch.softmax(scores, dim=1)
+        context = (x * alpha.unsqueeze(-1)).sum(dim=1)
+        return context, alpha
+
+class MultiBranchLSTMWithAttentionAndTransformer(nn.Module):
+    def __init__(self, input_dim_fast, input_dim_slow, hidden_dim, num_layers):
+        super(MultiBranchLSTMWithAttentionAndTransformer, self).__init__()
+        
+        self.lstm_fast = nn.LSTM(input_dim_fast, hidden_dim, num_layers, batch_first=True)
+        self.lstm_slow = nn.LSTM(input_dim_slow, hidden_dim, num_layers, batch_first=True)
+        
+        self.attention_fast = Attention(hidden_dim)
+        self.attention_slow = Attention(hidden_dim)
+        
+        self.transformer_layer = nn.TransformerEncoderLayer(d_model=hidden_dim * 2, nhead=4)
+        self.transformer_encoder = nn.TransformerEncoder(self.transformer_layer, num_layers=1)
+        
+        self.fc = nn.Linear(hidden_dim * 2, 1)
+
+    def forward(self, x_fast, x_slow):
+        out_fast, _ = self.lstm_fast(x_fast)
+        out_slow, _ = self.lstm_slow(x_slow)
+        
+        context_fast, _ = self.attention_fast(out_fast)
+        context_slow, _ = self.attention_slow(out_slow)
+        
+        combined = torch.cat((context_fast, context_slow), dim=1).unsqueeze(1)
+        transformer_out = self.transformer_encoder(combined).squeeze(1)
+        
+        out = self.fc(transformer_out)
+        return out
+
 class PhysicsInformedBMSLoss(nn.Module):
     def __init__(self, lambda_penalty=0.0, current_zero_val=0.0, current_threshold=0.05):
         super(PhysicsInformedBMSLoss, self).__init__()
         self.mae = nn.L1Loss()
         self.lambda_penalty = lambda_penalty
-        self.zero_val = current_zero_val
-        self.threshold = current_threshold
-
-    def forward(self, pred_t, pred_t_1, y_true, current_t_scaled):
-        base_loss = self.mae(pred_t, y_true)
-        delta_pred = torch.abs(pred_t - pred_t_1)
-        is_idle = (torch.abs(current_t_scaled - self.zero_val) < self.threshold).float().unsqueeze(1)
-        physics_penalty = torch.mean(delta_pred * is_idle)
-        
-        return base_loss + (self.lambda_penalty * physics_penalty)
-
-class BatteryMultiBranchNet(nn.Module):
-    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
-        super(BatteryMultiBranchNet, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)      
-        self.relu = nn.ReLU()
-        self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
-        self.cnn_dropout = nn.Dropout(p=dropout)
-        
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
-        self.drop_fast = nn.Dropout(p=dropout)
-
-        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
-        self.drop_slow = nn.Dropout(p=dropout)
-
-        self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
-        self.relu_fusion = nn.ReLU()
-        self.fc_out = nn.Linear(32, 1)
-
-    def forward(self, x_fast, x_slow):
-        xf = x_fast.permute(0, 2, 1)  
-        out_f = self.cnn_dropout(self.pool(self.relu(self.conv1(xf)))).permute(0, 2, 1)  
-        
-        lstm_f_out, _ = self.lstm_fast(out_f)
-        feat_fast_t   = self.drop_fast(lstm_f_out[:, -1, :])
-        feat_fast_t_1 = self.drop_fast(lstm_f_out[:, -2, :]) 
-
-        lstm_s_out, _ = self.lstm_slow(x_slow)
-        feat_slow_t   = self.drop_slow(lstm_s_out[:, -1, :])
-        feat_slow_t_1 = self.drop_slow(lstm_s_out[:, -2, :]) 
-
-        combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
-        pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
-        
-        combined_t_1 = torch.cat((feat_fast_t_1, feat_slow_t_1), dim=1)
-        pred_t_1 = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t_1)))
-        
-        return pred_t, pred_t_1
+    
+    def forward(self, pred, target):
+        return self.mae(pred, target)
 
 # ==========================================
-# 3. LOOP DI ADDESTRAMENTO CON METRICHE
+# 3. FUNZIONE DI TRAINING E VALUTAZIONE
 # ==========================================
 def train_and_evaluate():
-    t_start = time.time()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
+    # Caricamento e preparazione dei dati
     X_tr_f, X_tr_s, y_tr, X_te_f, X_te_s, y_te, scaler = process_and_split_data()
+    train_dataset = TensorDataset(torch.tensor(X_tr_f, dtype=torch.float32), torch.tensor(X_tr_s, dtype=torch.float32), torch.tensor(y_tr, dtype=torch.float32))
+    test_dataset = TensorDataset(torch.tensor(X_te_f, dtype=torch.float32), torch.tensor(X_te_s, dtype=torch.float32), torch.tensor(y_te, dtype=torch.float32))
     
-    train_loader = DataLoader(TensorDataset(torch.tensor(X_tr_f, dtype=torch.float32), 
-                                            torch.tensor(X_tr_s, dtype=torch.float32), 
-                                            torch.tensor(y_tr, dtype=torch.float32).view(-1, 1)), 
-                              batch_size=128, shuffle=True)
-                              
-    test_loader = DataLoader(TensorDataset(torch.tensor(X_te_f, dtype=torch.float32), 
-                                           torch.tensor(X_te_s, dtype=torch.float32), 
-                                           torch.tensor(y_te, dtype=torch.float32).view(-1, 1)), 
-                             batch_size=128, shuffle=False)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = BatteryMultiBranchNet(input_size=5).to(device)
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+    
+    # Definizione del modello
+    input_dim_fast = X_tr_f.shape[2]
+    input_dim_slow = X_tr_s.shape[2]
+    hidden_dim = 128
+    num_layers = 2
+    model = MultiBranchLSTMWithAttentionAndTransformer(input_dim_fast, input_dim_slow, hidden_dim, num_layers).to(device)
+    
+    # Definizione della loss e dell'ottimizzatore
+    criterion = PhysicsInformedBMSLoss(lambda_penalty=0.1)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=10, verbose=True)
     
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    
-    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=5)
-
-    dummy_array = np.zeros((1, 5))
-    scaled_zero_amp = scaler.transform(dummy_array)[0, 1]
-    dummy_array[0, 1] = 0.5 
-    scaled_half_amp = abs(scaler.transform(dummy_array)[0, 1] - scaled_zero_amp)
-
-    criterion = PhysicsInformedBMSLoss(lambda_penalty=0.1, current_zero_val=scaled_zero_amp, current_threshold=scaled_half_amp)
-    
-    epoch_num = 300
     total_steps = 0
+    epoch_num = 100
     t_start_training = time.time()
     
     print(f"\nInizio Addestramento su {device} - Parametri Modello: {num_params / 1e6:.2f}M")
     
+    # Ciclo di addestramento
     for epoch in range(epoch_num):
         model.train()
         train_loss = 0.0
-        
         for batch_xf, batch_xs, batch_y in train_loader:
             batch_xf, batch_xs, batch_y = batch_xf.to(device), batch_xs.to(device), batch_y.to(device)
+            
             optimizer.zero_grad()
-            
-            pred_t, pred_t_1 = model(batch_xf, batch_xs) 
-            current_t_scaled = batch_xf[:, -1, 1]
-            
-            loss = criterion(pred_t, pred_t_1, batch_y, current_t_scaled)
+            pred = model(batch_xf, batch_xs)
+            loss = criterion(pred, batch_y)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
             train_loss += loss.item()
             total_steps += 1
-            
+        
+        # Valutazione sul set di test
         model.eval()
         epoch_test_mae = 0.0
         with torch.no_grad():
             for batch_xf_te, batch_xs_te, batch_y_te in test_loader:
                 batch_xf_te, batch_xs_te, batch_y_te = batch_xf_te.to(device), batch_xs_te.to(device), batch_y_te.to(device)
-                pred_t_eval, _ = model(batch_xf_te, batch_xs_te)
+                pred_t_eval = model(batch_xf_te, batch_xs_te)
                 epoch_test_mae += nn.L1Loss()(pred_t_eval, batch_y_te).item()
         
         epoch_test_mae /= len(test_loader)
@@ -204,7 +191,7 @@ def train_and_evaluate():
     with torch.no_grad():
         for batch_xf_te, batch_xs_te, batch_y_te in test_loader:
             batch_xf_te, batch_xs_te = batch_xf_te.to(device), batch_xs_te.to(device)
-            pred_t_final, _ = model(batch_xf_te, batch_xs_te)
+            pred_t_final = model(batch_xf_te, batch_xs_te)
             all_y_pred.append(pred_t_final.cpu().numpy())
             all_y_true.append(batch_y_te.numpy())
             
@@ -220,23 +207,13 @@ def train_and_evaluate():
     else:
         peak_vram_mb = 0.0
 
-    total_time = time.time() - t_start
+    total_time = time.time() - t_start_training
 
     print("\n" + "="*40)
     print("FINAL EVALUATION METRICS")
     print("="*40)
-    # Rimosso il simbolo % e le stringhe MB/s per facilitare il parsing dell'LLM
     print(f"test_mae_percent:   {mae * 100:.4f}")
-    print(f"test_rmse_percent:  {rmse * 100:.4f}")
-    print(f"max_error_percent:  {max_err * 100:.4f}")
-    print("-" * 40)
-    print(f"training_seconds:   {training_time:.1f}")
-    print(f"total_seconds:      {total_time:.1f}")
     print(f"peak_vram_mb:       {peak_vram_mb:.1f}")
-    print(f"num_steps:          {total_steps}")
-    print(f"total_samples:      {len(y_tr) + len(y_te)}")
-    print(f"num_params_M:       {num_params / 1e6:.4f}")
-    print("="*40)
 
 if __name__ == "__main__":
     try:
