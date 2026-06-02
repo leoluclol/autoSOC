@@ -1,5 +1,5 @@
 """
-Autoresearch pretraining script per LSTM Multi-Branch (PINN) con Attention e Transformer.
+Autoresearch pretraining script per LSTM Multi-Branch (PINN) con Attention.
 Script unificato, ottimizzato per l'esecuzione su Kaggle Cloud.
 """
 
@@ -80,18 +80,15 @@ class Attention(nn.Module):
         context = (x * alpha.unsqueeze(-1)).sum(dim=1)
         return context, alpha
 
-class MultiBranchLSTMWithAttentionAndTransformer(nn.Module):
+class MultiBranchLSTMWithAttention(nn.Module):
     def __init__(self, input_dim_fast, input_dim_slow, hidden_dim, num_layers):
-        super(MultiBranchLSTMWithAttentionAndTransformer, self).__init__()
+        super(MultiBranchLSTMWithAttention, self).__init__()
         
         self.lstm_fast = nn.LSTM(input_dim_fast, hidden_dim, num_layers=1, batch_first=True)
         self.lstm_slow = nn.LSTM(input_dim_slow, hidden_dim, num_layers=1, batch_first=True)
         
         self.attention_fast = Attention(hidden_dim)
         self.attention_slow = Attention(hidden_dim)
-        
-        self.transformer_layer = nn.TransformerEncoderLayer(d_model=hidden_dim * 2, nhead=2)
-        self.transformer_encoder = nn.TransformerEncoder(self.transformer_layer, num_layers=1)
         
         self.fc = nn.Linear(hidden_dim * 2, 1)
 
@@ -102,10 +99,9 @@ class MultiBranchLSTMWithAttentionAndTransformer(nn.Module):
         context_fast, _ = self.attention_fast(out_fast)
         context_slow, _ = self.attention_slow(out_slow)
         
-        combined = torch.cat((context_fast, context_slow), dim=1).unsqueeze(1)
-        transformer_out = self.transformer_encoder(combined).squeeze(1)
+        combined = torch.cat((context_fast, context_slow), dim=1)
         
-        out = self.fc(transformer_out)
+        out = self.fc(combined)
         return out
 
 class PhysicsInformedBMSLoss(nn.Module):
@@ -134,9 +130,9 @@ def train_and_evaluate():
     # Definizione del modello
     input_dim_fast = X_tr_f.shape[2]
     input_dim_slow = X_tr_s.shape[2]
-    hidden_dim = 64  # Ridotto da 128 a 64
-    num_layers = 1   # Ridotto il numero di layer
-    model = MultiBranchLSTMWithAttentionAndTransformer(input_dim_fast, input_dim_slow, hidden_dim, num_layers).to(device)
+    hidden_dim = 64  # Mantenuto a 64
+    num_layers = 1   # Mantenuto a 1
+    model = MultiBranchLSTMWithAttention(input_dim_fast, input_dim_slow, hidden_dim, num_layers).to(device)
     
     # Definizione della loss e dell'ottimizzatore
     criterion = PhysicsInformedBMSLoss(lambda_penalty=0.1)
