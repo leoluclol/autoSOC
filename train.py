@@ -1,5 +1,5 @@
 """
-Autoresearch pretraining script per LSTM Multi-Branch (PINN).
+Autoresearch pretraining script per LSTM/CNN + Transformer (PINN).
 Script unificato, ottimizzato per l'esecuzione su Kaggle Cloud.
 """
 
@@ -116,7 +116,7 @@ class Attention(nn.Module):
         return context_vector
 
 class BatteryMultiBranchNet(nn.Module):
-    def __init__(self, input_size, cnn_out_channels=128, lstm_fast_hidden=128, lstm_slow_hidden=128, dropout=0.3):
+    def __init__(self, input_size, cnn_out_channels=128, lstm_fast_hidden=128, transformer_hidden=128, nhead=4, num_layers=2, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
         self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(in_channels=cnn_out_channels, out_channels=cnn_out_channels, kernel_size=3, padding=1)
@@ -128,11 +128,12 @@ class BatteryMultiBranchNet(nn.Module):
         self.attention_fast = Attention(lstm_fast_hidden)
         self.drop_fast = nn.Dropout(p=dropout)
 
-        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
-        self.attention_slow = Attention(lstm_slow_hidden)
+        self.transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=input_size, nhead=nhead, dim_feedforward=transformer_hidden, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(self.transformer_encoder_layer, num_layers=num_layers)
+        self.attention_slow = Attention(input_size)
         self.drop_slow = nn.Dropout(p=dropout)
 
-        self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
+        self.fc_fusion = nn.Linear(lstm_fast_hidden + input_size, 32)
         self.relu_fusion = nn.ReLU()
         self.fc_out = nn.Linear(32, 1)
 
@@ -143,8 +144,10 @@ class BatteryMultiBranchNet(nn.Module):
         lstm_f_out, _ = self.lstm_fast(out_f)
         feat_fast_t = self.drop_fast(self.attention_fast(lstm_f_out))
         
-        lstm_s_out, _ = self.lstm_slow(x_slow)
-        feat_slow_t = self.drop_slow(self.attention_slow(lstm_s_out))
+        x_slow = x_slow.permute(1, 0, 2)  # Transformer expects input of shape (seq_len, batch, input_size)
+        transformer_out = self.transformer_encoder(x_slow)
+        transformer_out = transformer_out.permute(1, 0, 2)  # Back to (batch, seq_len, input_size)
+        feat_slow_t = self.drop_slow(self.attention_slow(transformer_out))
 
         combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
         pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
