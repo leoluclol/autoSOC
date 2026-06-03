@@ -1,0 +1,1 @@
+I replaced the previous attention-heavy fusion architecture with a compact HysteresisAwareFusionNet that blends a fast GRU-based path with a slow GRU path, and I introduced explicit direction-aware gating to modulate the slow context, improving hysteresis modeling while keeping the parameter count low.

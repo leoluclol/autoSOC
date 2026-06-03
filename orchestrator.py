@@ -152,7 +152,7 @@ def main_loop():
 
         with open("llm_chat_log.txt", "a") as file:
             file.write(extract_llm_text(ai_message))
-            file.write("\n")
+            file.write("\n\n\n")
             
         conversation_history.append({"role": "assistant", "content": ai_message})
         
