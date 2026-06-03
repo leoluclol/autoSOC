@@ -35,8 +35,13 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
     df['Ah_step'] = (df['Current (A)'] * df['dt']) / 3600.0
     df['Ah_roll600'] = df['Ah_step'].rolling(window=600, min_periods=1).sum()
     df['dV_dt'] = df['Voltage (V)'].diff().fillna(0)
+    df['current_direction'] = np.sign(df['Current (A)']).fillna(0)
+    df['current_dir_ema'] = df['current_direction'].ewm(span=30, adjust=False).mean().fillna(0)
     
-    features_cols = ['Voltage (V)', 'Current (A)', 'Ah_roll600', 'dV_dt', 'T']
+    features_cols = [
+        'Voltage (V)', 'Current (A)', 'Ah_roll600', 'dV_dt', 'T',
+        'current_direction', 'current_dir_ema'
+    ]
     target_col = 'SOC'
     
     df = df.dropna(subset=features_cols + [target_col]).reset_index(drop=True)
@@ -149,14 +154,14 @@ def train_and_evaluate():
                              batch_size=128, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = BatteryTransformerNet(input_size=5).to(device)
+    model = BatteryTransformerNet(input_size=7).to(device)
     
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
     optimizer = optim.Adam(model.parameters(), lr=0.0003, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=3)
 
-    dummy_array = np.zeros((1, 5))
+    dummy_array = np.zeros((1, 7))
     scaled_zero_amp = scaler.transform(dummy_array)[0, 1]
     dummy_array[0, 1] = 0.5 
     scaled_half_amp = abs(scaler.transform(dummy_array)[0, 1] - scaled_zero_amp)
