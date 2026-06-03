@@ -26,10 +26,9 @@ def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_len
 def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx'):
     print(f"Loading data from {filename}...")
     df = pd.read_excel(filename, sheet_name='Temp_25C')
-    df = df.drop_duplicates(subset=['Time (s)'], keep='first') 
+    df = df.drop_duplicates(subset=['Time (s)'], keep='first').reset_index(drop=True)
     
     df['dt'] = df['Time (s)'].diff().fillna(0)
-    
     if 'Temperature (C)' in df.columns and 'T' not in df.columns:
         df = df.rename(columns={'Temperature (C)': 'T'})
     
@@ -40,19 +39,31 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
     features_cols = ['Voltage (V)', 'Current (A)', 'Ah_roll600', 'dV_dt', 'T']
     target_col = 'SOC'
     
-    df = df.dropna(subset=features_cols + [target_col])
+    df = df.dropna(subset=features_cols + [target_col]).reset_index(drop=True)
     
+    # --- FIX 1: Split raw data chronologically FIRST ---
+    split_idx = int(len(df) * 0.8)
+    train_df = df.iloc[:split_idx].copy()
+    test_df = df.iloc[split_idx:].copy()
+    
+    # --- FIX 2: Fit scaler ONLY on training data ---
     scaler = MinMaxScaler()
-    X_data = df[features_cols].values
-    X_scaled = scaler.fit_transform(X_data)
-    y_values = df[target_col].values
+    X_train_raw = train_df[features_cols].values
+    X_test_raw = test_df[features_cols].values
     
-    Xt_f, Xt_s, Yt = create_multibranch_sequences(X_scaled, y_values, fast_seq_length=100, slow_seq_length=150, slow_step=5)
+    X_train_scaled = scaler.fit_transform(X_train_raw)
+    X_test_scaled = scaler.transform(X_test_raw) # Crucial: only transform the test set
     
-    split_idx = int(len(Xt_f) * 0.8)
+    y_train_val = train_df[target_col].values
+    y_test_val = test_df[target_col].values
     
-    X_tr_f, X_tr_s, y_tr = Xt_f[:split_idx], Xt_s[:split_idx], Yt[:split_idx]
-    X_te_f, X_te_s, y_te = Xt_f[split_idx:], Xt_s[split_idx:], Yt[split_idx:]
+    # --- FIX 3: Generate windows independently to avoid overlap leakage ---
+    X_tr_f, X_tr_s, y_tr = create_multibranch_sequences(
+        X_train_scaled, y_train_val, fast_seq_length=100, slow_seq_length=150, slow_step=5
+    )
+    X_te_f, X_te_s, y_te = create_multibranch_sequences(
+        X_test_scaled, y_test_val, fast_seq_length=100, slow_seq_length=150, slow_step=5
+    )
     
     return X_tr_f, X_tr_s, y_tr, X_te_f, X_te_s, y_te, scaler
 
