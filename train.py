@@ -27,7 +27,7 @@ FEATURE_COLUMNS = [
 # ==========================================
 def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_length=150, slow_step=5):
     xs_fast, xs_slow, ys = [], [], []
-    max_lookback = slow_seq_length * slow_step 
+    max_lookback = slow_seq_length * slow_step
 
     for i in range(max_lookback - 1, len(data)):
         x_f = data[i - fast_seq_length + 1 : i + 1]
@@ -105,32 +105,17 @@ class PhysicsInformedBMSLoss(nn.Module):
         physics_penalty = torch.mean(delta_pred * is_idle)
         return base_loss + (self.lambda_penalty * physics_penalty)
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, dim, max_len=150):
-        super(PositionalEncoding, self).__init__()
-        pe = torch.zeros(max_len, dim)
-        position = torch.arange(0, max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, dim, 2) * (-np.log(10000.0) / dim))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        length = x.size(1)
-        return x + self.pe[:length]
-
-class BatteryAttentionFusionNet(nn.Module):
-    def __init__(self, input_size, fast_channels=32, fast_hidden=64, slow_hidden=64, attn_heads=4, dropout=0.3):
-        super(BatteryAttentionFusionNet, self).__init__()
+class HysteresisAwareFusionNet(nn.Module):
+    def __init__(self, input_size, fast_channels=32, fast_hidden=48, slow_hidden=48, dropout=0.25):
+        super(HysteresisAwareFusionNet, self).__init__()
         self.fast_conv = nn.Conv1d(in_channels=input_size, out_channels=fast_channels, kernel_size=3, padding=1)
-        self.fast_pool = nn.MaxPool1d(kernel_size=2, stride=2)
-        self.fast_dropout = nn.Dropout(p=dropout)
-        self.fast_lstm = nn.LSTM(input_size=fast_channels, hidden_size=fast_hidden, batch_first=True, num_layers=1)
-        self.fast_skip = nn.Linear(fast_hidden, fast_hidden)
+        self.fast_dropout = nn.Dropout(dropout)
+        self.fast_gru = nn.GRU(fast_channels, fast_hidden, batch_first=True)
 
         self.slow_linear = nn.Linear(input_size, slow_hidden)
-        self.pos_enc = PositionalEncoding(slow_hidden, max_len=150)
-        self.attn = nn.MultiheadAttention(embed_dim=slow_hidden, num_heads=attn_heads, batch_first=True, dropout=dropout)
+        self.slow_dropout = nn.Dropout(dropout)
+        self.slow_gru = nn.GRU(slow_hidden, slow_hidden, batch_first=True)
+        self.slow_norm = nn.LayerNorm(slow_hidden)
 
         self.dir_gate = nn.Sequential(
             nn.Linear(3, slow_hidden),
@@ -139,50 +124,52 @@ class BatteryAttentionFusionNet(nn.Module):
             nn.Sigmoid()
         )
 
+        fusion_input = fast_hidden + slow_hidden
         self.fusion = nn.Sequential(
-            nn.Linear(fast_hidden + slow_hidden, 64),
+            nn.Linear(fusion_input, 40),
             nn.SiLU(),
             nn.Dropout(dropout),
-            nn.Linear(64, 32),
+            nn.Linear(40, 18),
             nn.SiLU()
         )
-        self.head = nn.Linear(32, 1)
+        self.head = nn.Linear(18, 1)
 
-    def _build_gate(self, avg_current, direction, time_since):
-        gate_in = torch.stack([avg_current, direction, time_since], dim=1)
-        return self.dir_gate(gate_in)
+    def _prepare_direction_gates(self, x_fast, idx_dir, idx_time):
+        dir_t = x_fast[:, -1, idx_dir]
+        dir_t_1 = x_fast[:, -2, idx_dir]
+        time_since_t = x_fast[:, -1, idx_time] / 200.0
+        time_since_t_1 = x_fast[:, -2, idx_time] / 200.0
+
+        hist_t = x_fast[:, -25:-5, idx_dir]
+        hist_t_1 = x_fast[:, -26:-6, idx_dir]
+
+        dir_hist_t = hist_t.mean(dim=1)
+        dir_hist_t_1 = hist_t_1.mean(dim=1)
+
+        gate_t = self.dir_gate(torch.stack([dir_t, dir_hist_t, time_since_t], dim=1))
+        gate_t_1 = self.dir_gate(torch.stack([dir_t_1, dir_hist_t_1, time_since_t_1], dim=1))
+        return gate_t, gate_t_1
 
     def forward(self, x_fast, x_slow):
         xf = torch.relu(self.fast_conv(x_fast.permute(0, 2, 1)))
-        xf = self.fast_pool(xf)
+        xf = xf.permute(0, 2, 1)
         xf = self.fast_dropout(xf)
-        fast_out, _ = self.fast_lstm(xf.permute(0, 2, 1))
-        fast_feat_t = torch.relu(self.fast_skip(fast_out[:, -1, :]))
-        fast_feat_t_1 = torch.relu(self.fast_skip(fast_out[:, -2, :]))
+        fast_out, _ = self.fast_gru(xf)
+        fast_feat_t = torch.relu(fast_out[:, -1, :])
+        fast_feat_t_1 = torch.relu(fast_out[:, -2, :])
 
         slow_emb = torch.relu(self.slow_linear(x_slow))
-        slow_emb = self.pos_enc(slow_emb)
-        query_t = fast_feat_t.unsqueeze(1)
-        query_t_1 = fast_feat_t_1.unsqueeze(1)
-        attn_t, _ = self.attn(query_t, slow_emb, slow_emb)
-        attn_t_1, _ = self.attn(query_t_1, slow_emb, slow_emb)
-        attn_t = attn_t.squeeze(1)
-        attn_t_1 = attn_t_1.squeeze(1)
+        slow_emb = self.slow_dropout(slow_emb)
+        slow_out, _ = self.slow_gru(slow_emb)
+        slow_t = self.slow_norm(slow_out[:, -1, :])
+        slow_t_1 = self.slow_norm(slow_out[:, -2, :])
 
-        curr_t = x_fast[:, -5:, FEATURE_COLUMNS.index('Current (A)')]
-        curr_t_1 = x_fast[:, -6:-1, FEATURE_COLUMNS.index('Current (A)')]
-        avg_t = curr_t.mean(dim=1)
-        avg_t_1 = curr_t_1.mean(dim=1)
-        dir_t = x_fast[:, -1, FEATURE_COLUMNS.index('Current_dir')]
-        dir_t_1 = x_fast[:, -2, FEATURE_COLUMNS.index('Current_dir')]
-        time_stamp_t = x_fast[:, -1, FEATURE_COLUMNS.index('time_since_dir_change')]
-        time_stamp_t_1 = x_fast[:, -2, FEATURE_COLUMNS.index('time_since_dir_change')]
+        idx_dir = FEATURE_COLUMNS.index('Current_dir')
+        idx_time = FEATURE_COLUMNS.index('time_since_dir_change')
+        gate_t, gate_t_1 = self._prepare_direction_gates(x_fast, idx_dir, idx_time)
 
-        gate_t = self._build_gate(avg_t, dir_t, time_stamp_t)
-        gate_t_1 = self._build_gate(avg_t_1, dir_t_1, time_stamp_t_1)
-
-        gated_slow_t = attn_t * gate_t
-        gated_slow_t_1 = attn_t_1 * gate_t_1
+        gated_slow_t = slow_t * gate_t
+        gated_slow_t_1 = slow_t_1 * gate_t_1
 
         fused_t = self.fusion(torch.cat([fast_feat_t, gated_slow_t], dim=1))
         fused_t_1 = self.fusion(torch.cat([fast_feat_t_1, gated_slow_t_1], dim=1))
@@ -203,19 +190,19 @@ def train_and_evaluate():
     train_loader = DataLoader(TensorDataset(torch.tensor(X_tr_f, dtype=torch.float32),
                                             torch.tensor(X_tr_s, dtype=torch.float32),
                                             torch.tensor(y_tr, dtype=torch.float32).view(-1, 1)),
-                              batch_size=128, shuffle=True)
+                              batch_size=96, shuffle=True)
 
     test_loader = DataLoader(TensorDataset(torch.tensor(X_te_f, dtype=torch.float32),
                                            torch.tensor(X_te_s, dtype=torch.float32),
                                            torch.tensor(y_te, dtype=torch.float32).view(-1, 1)),
-                             batch_size=128, shuffle=False)
+                             batch_size=96, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = BatteryAttentionFusionNet(input_size=len(FEATURE_COLUMNS)).to(device)
+    model = HysteresisAwareFusionNet(input_size=len(FEATURE_COLUMNS)).to(device)
 
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    optimizer = optim.Adam(model.parameters(), lr=4e-4, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=3e-4, weight_decay=5e-6)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=5)
 
     dummy_array = np.zeros((1, len(FEATURE_COLUMNS)))
