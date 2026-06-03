@@ -126,7 +126,7 @@ def main_loop():
         print(f"\n{'='*40}\nITERATION {iteration}\n{'='*40}")
         current_train_py = read_file("train.py")
         
-        llm_model = "gpt-5.1-codex-mini"
+        llm_model = "gpt-5.5"
 
         # 1. Ask the LLM to think and write the new code
         print(llm_model + " is thinking")
