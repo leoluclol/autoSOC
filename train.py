@@ -124,10 +124,12 @@ class BatteryMultiBranchNet(nn.Module):
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        # Aggiungo un ulteriore livello LSTM alla branca "fast"
+        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=3, batch_first=True, dropout=dropout)
         self.attention_fast = Attention(lstm_fast_hidden)
         self.drop_fast = nn.Dropout(p=dropout)
 
+        # Modifico i parametri del livello Transformer
         self.transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=input_size, nhead=nhead, dim_feedforward=transformer_hidden, dropout=dropout)
         self.transformer_encoder = nn.TransformerEncoder(self.transformer_encoder_layer, num_layers=num_layers)
         self.attention_slow = Attention(input_size)
