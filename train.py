@@ -80,7 +80,6 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
-# --- NEW: Added Positional Encoding Module ---
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=150):
         super(PositionalEncoding, self).__init__()
@@ -90,17 +89,15 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, :x.size(1), :]
 
 class BatteryTransformerNet(nn.Module):
-    def __init__(self, input_size, transformer_dim=64, num_heads=4, num_layers=2, dropout=0.3):
+    def __init__(self, input_size, transformer_dim=64, num_heads=8, num_layers=3, dropout=0.5):
         super(BatteryTransformerNet, self).__init__()
         
         self.fc_fast = nn.Linear(input_size, transformer_dim)
         self.fc_slow = nn.Linear(input_size, transformer_dim)
         
-        # Encodings help the model track the passage of time steps
         self.pos_fast = PositionalEncoding(transformer_dim, max_len=100)
         self.pos_slow = PositionalEncoding(transformer_dim, max_len=150)
         
-        # Note the 'batch_first=True' modification here
         encoder_layer_fast = nn.TransformerEncoderLayer(d_model=transformer_dim, nhead=num_heads, dropout=dropout, batch_first=True)
         self.transformer_fast = nn.TransformerEncoder(encoder_layer_fast, num_layers=num_layers)
         
@@ -108,32 +105,30 @@ class BatteryTransformerNet(nn.Module):
         self.transformer_slow = nn.TransformerEncoder(encoder_layer_slow, num_layers=num_layers)
         
         self.fc_fusion = nn.Linear(2 * transformer_dim, 32)
+        self.bn_fusion = nn.BatchNorm1d(32)
         self.relu_fusion = nn.ReLU()
         self.fc_out = nn.Linear(32, 1)
 
     def forward(self, x_fast, x_slow):
-        # 1. Project to Transformer Dimensions
         x_f = self.fc_fast(x_fast)
         x_s = self.fc_slow(x_slow)
         
-        # 2. Add Positional Context
         x_f = self.pos_fast(x_f)
         x_s = self.pos_slow(x_s)
         
-        # 3. Compute Attention Map Outputs
         out_f = self.transformer_fast(x_f)
         out_s = self.transformer_slow(x_s)
         
-        # --- FIX: Extracted real index steps for Time t ---
         feat_fast_t = out_f[:, -1, :]
         feat_slow_t = out_s[:, -1, :]
         combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
+        combined_t = self.bn_fusion(combined_t)
         pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
         
-        # --- FIX: Extracted distinct slices for Time t-1 ---
         feat_fast_t_1 = out_f[:, -2, :]
         feat_slow_t_1 = out_s[:, -2, :]
         combined_t_1 = torch.cat((feat_fast_t_1, feat_slow_t_1), dim=1)
+        combined_t_1 = self.bn_fusion(combined_t_1)
         pred_t_1 = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t_1)))
         
         return pred_t, pred_t_1
@@ -158,8 +153,8 @@ def train_and_evaluate():
     
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
-    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=5)
+    optimizer = optim.Adam(model.parameters(), lr=0.0003, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=3)
 
     dummy_array = np.zeros((1, 5))
     scaled_zero_amp = scaler.transform(dummy_array)[0, 1]
