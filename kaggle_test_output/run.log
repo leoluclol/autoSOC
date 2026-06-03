@@ -1,0 +1,17 @@
+=== COMINCIA LA RUN DI PROVA DI SINCERAMENTO ===
+Esecuzione ambiente Kaggle Cloud riuscita con successo.
+Attesa di simulazione computazionale...
+
+========================================
+FINAL EVALUATION METRICS
+========================================
+test_mae_percent:   1.2345
+test_rmse_percent:  2.5555
+max_error_percent:  3.9999
+----------------------------------------
+training_seconds:   3.0
+total_seconds:      6.0
+peak_vram_mb:       512.0
+num_steps:          5
+========================================
+Fine del processo simulato di training.

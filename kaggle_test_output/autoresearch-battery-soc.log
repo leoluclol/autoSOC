@@ -1,0 +1,24 @@
+[{"stream_name":"stdout","time":0.678557952,"data":"=== COMINCIA LA RUN DI PROVA DI SINCERAMENTO ===\n"}
+,{"stream_name":"stdout","time":0.678604049,"data":"Esecuzione ambiente Kaggle Cloud riuscita con successo.\n"}
+,{"stream_name":"stdout","time":0.678608593,"data":"Attesa di simulazione computazionale...\n"}
+,{"stream_name":"stdout","time":3.678845912,"data":"\n"}
+,{"stream_name":"stdout","time":3.678877686,"data":"========================================\n"}
+,{"stream_name":"stdout","time":3.678881509,"data":"FINAL EVALUATION METRICS\n"}
+,{"stream_name":"stdout","time":3.678884148,"data":"========================================\n"}
+,{"stream_name":"stdout","time":3.678886756,"data":"test_mae_percent:   1.2345\n"}
+,{"stream_name":"stdout","time":3.678889338,"data":"test_rmse_percent:  2.5555\n"}
+,{"stream_name":"stdout","time":3.678892099,"data":"max_error_percent:  3.9999\n"}
+,{"stream_name":"stdout","time":3.678895927,"data":"----------------------------------------\n"}
+,{"stream_name":"stdout","time":3.67890049,"data":"training_seconds:   3.0\n"}
+,{"stream_name":"stdout","time":3.678904506,"data":"total_seconds:      6.0\n"}
+,{"stream_name":"stdout","time":3.678908208,"data":"peak_vram_mb:       512.0\n"}
+,{"stream_name":"stdout","time":3.678912136,"data":"num_steps:          5\n"}
+,{"stream_name":"stdout","time":3.678915763,"data":"========================================\n"}
+,{"stream_name":"stdout","time":3.678919891,"data":"Fine del processo simulato di training.\n"}
+,{"stream_name":"stderr","time":6.162467165,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":6.162545877,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":6.47977782,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":6.479806204,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":7.676856787,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":9.065060016,"data":"[NbConvertApp] Writing 278115 bytes to __results__.html\n"}
+]
