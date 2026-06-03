@@ -1,6 +1,6 @@
 """
 Autoresearch pretraining script per LSTM Multi-Branch (PINN).
-Script unificato, ottimizzato per l'esecuzione su Kaggle Cloud.
+Script unificato, attimizzato per l'esecuzione su Kaggle Cloud.
 """
 
 import os
@@ -84,37 +84,36 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
-class Attention(nn.Module):
+class AttentionLayer(nn.Module):
     def __init__(self, input_dim):
-        super(Attention, self).__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(input_dim, input_dim),
-            nn.Tanh(),
-            nn.Linear(input_dim, 1)
-        )
+        super(AttentionLayer, self).__init__()
+        self.attention_weights = nn.Parameter(torch.Tensor(input_dim, 1))
+        nn.init.xavier_uniform_(self.attention_weights)
 
     def forward(self, x):
-        attn_weights = torch.softmax(self.attention(x), dim=1)
-        return torch.sum(x * attn_weights, dim=1)
+        attention_scores = torch.matmul(x, self.attention_weights).squeeze(-1)
+        attention_weights = torch.softmax(attention_scores, dim=1)
+        weighted_sum = torch.bmm(attention_weights.unsqueeze(1), x).squeeze(1)
+        return weighted_sum
 
 class BatteryMultiBranchNet(nn.Module):
-    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=128, lstm_slow_hidden=128, dropout=0.3):
+    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
         self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)      
         self.relu = nn.ReLU()
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout, bidirectional=True)
+        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
         self.drop_fast = nn.Dropout(p=dropout)
 
-        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout, bidirectional=True)
+        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
         self.drop_slow = nn.Dropout(p=dropout)
 
-        self.attention_fast = Attention(lstm_fast_hidden * 2)
-        self.attention_slow = Attention(lstm_slow_hidden * 2)
+        self.attention_fast = AttentionLayer(lstm_fast_hidden)
+        self.attention_slow = AttentionLayer(lstm_slow_hidden)
 
-        self.fc_fusion = nn.Linear(lstm_fast_hidden * 2 + lstm_slow_hidden * 2, 32)
+        self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
         self.relu_fusion = nn.ReLU()
         self.fc_out = nn.Linear(32, 1)
 
@@ -124,14 +123,14 @@ class BatteryMultiBranchNet(nn.Module):
         
         lstm_f_out, _ = self.lstm_fast(out_f)
         feat_fast_t = self.attention_fast(lstm_f_out)
-
+        
         lstm_s_out, _ = self.lstm_slow(x_slow)
         feat_slow_t = self.attention_slow(lstm_s_out)
 
         combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
         pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
         
-        return pred_t, pred_t  # Use the same pred_t for pred_t_1 for simplicity, adjust if needed
+        return pred_t, pred_t  # Return the same value for simplicity
 
 # ==========================================
 # 3. LOOP DI ADDESTRAMENTO CON METRICHE

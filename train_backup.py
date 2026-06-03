@@ -155,7 +155,7 @@ def train_and_evaluate():
 
     criterion = PhysicsInformedBMSLoss(lambda_penalty=0.1, current_zero_val=scaled_zero_amp, current_threshold=scaled_half_amp)
     
-    epoch_num = 300
+    epoch_num = 50
     total_steps = 0
     t_start_training = time.time()
     
