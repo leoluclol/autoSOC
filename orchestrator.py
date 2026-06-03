@@ -39,6 +39,18 @@ def extract_python_code(ai_response):
         return match.group(1).strip()
     return ai_response.strip()
 
+def extract_llm_text(ai_response):
+    """Extracts everything from the LLM response EXCEPT the python code blocks"""
+    ticks = "```"
+    # Matches the code blocks including the backticks
+    pattern = ticks + r"(?:python)?\n.*??" + ticks
+    
+    # Replace code blocks with an empty string (or a newline)
+    cleaned_text = re.sub(pattern, "", ai_response, flags=re.DOTALL)
+    
+    # Clean up any leftover double-newlines or trailing spaces
+    return re.sub(r'\n{3,}', '\n\n', cleaned_text).strip()
+
 def run_bash(command):
     """Executes a bash command and returns the output"""
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
@@ -125,7 +137,7 @@ def main_loop():
             temperature=0.7
         )
         ai_message = response.choices[0].message.content
-        print(ai_message)
+        print(extract_llm_text(ai_message))
         conversation_history.append({"role": "assistant", "content": ai_message})
         
         # 2. Extract and save the code, then commit

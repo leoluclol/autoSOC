@@ -80,35 +80,63 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
+# --- NEW: Added Positional Encoding Module ---
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=150):
+        super(PositionalEncoding, self).__init__()
+        self.pe = nn.Parameter(torch.zeros(1, max_len, d_model))
+        
+    def forward(self, x):
+        return x + self.pe[:, :x.size(1), :]
+
 class BatteryTransformerNet(nn.Module):
     def __init__(self, input_size, transformer_dim=64, num_heads=4, num_layers=2, dropout=0.3):
         super(BatteryTransformerNet, self).__init__()
-        self.transformer_fast = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=transformer_dim, nhead=num_heads, dropout=dropout), 
-            num_layers=num_layers
-        )
-        self.transformer_slow = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=transformer_dim, nhead=num_heads, dropout=dropout), 
-            num_layers=num_layers
-        )
+        
         self.fc_fast = nn.Linear(input_size, transformer_dim)
         self.fc_slow = nn.Linear(input_size, transformer_dim)
-        self.fc_out = nn.Linear(2 * transformer_dim, 1)
+        
+        # Encodings help the model track the passage of time steps
+        self.pos_fast = PositionalEncoding(transformer_dim, max_len=100)
+        self.pos_slow = PositionalEncoding(transformer_dim, max_len=150)
+        
+        # Note the 'batch_first=True' modification here
+        encoder_layer_fast = nn.TransformerEncoderLayer(d_model=transformer_dim, nhead=num_heads, dropout=dropout, batch_first=True)
+        self.transformer_fast = nn.TransformerEncoder(encoder_layer_fast, num_layers=num_layers)
+        
+        encoder_layer_slow = nn.TransformerEncoderLayer(d_model=transformer_dim, nhead=num_heads, dropout=dropout, batch_first=True)
+        self.transformer_slow = nn.TransformerEncoder(encoder_layer_slow, num_layers=num_layers)
+        
+        self.fc_fusion = nn.Linear(2 * transformer_dim, 32)
+        self.relu_fusion = nn.ReLU()
+        self.fc_out = nn.Linear(32, 1)
 
     def forward(self, x_fast, x_slow):
-        x_fast = self.fc_fast(x_fast)
-        x_slow = self.fc_slow(x_slow)
+        # 1. Project to Transformer Dimensions
+        x_f = self.fc_fast(x_fast)
+        x_s = self.fc_slow(x_slow)
         
-        x_fast = self.transformer_fast(x_fast.permute(1, 0, 2)).permute(1, 0, 2)
-        x_slow = self.transformer_slow(x_slow.permute(1, 0, 2)).permute(1, 0, 2)
+        # 2. Add Positional Context
+        x_f = self.pos_fast(x_f)
+        x_s = self.pos_slow(x_s)
         
-        feat_fast = x_fast[:, -1, :]
-        feat_slow = x_slow[:, -1, :]
+        # 3. Compute Attention Map Outputs
+        out_f = self.transformer_fast(x_f)
+        out_s = self.transformer_slow(x_s)
         
-        combined = torch.cat((feat_fast, feat_slow), dim=1)
-        pred = self.fc_out(combined)
+        # --- FIX: Extracted real index steps for Time t ---
+        feat_fast_t = out_f[:, -1, :]
+        feat_slow_t = out_s[:, -1, :]
+        combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
+        pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
         
-        return pred, pred  # Returning the same prediction for t and t-1
+        # --- FIX: Extracted distinct slices for Time t-1 ---
+        feat_fast_t_1 = out_f[:, -2, :]
+        feat_slow_t_1 = out_s[:, -2, :]
+        combined_t_1 = torch.cat((feat_fast_t_1, feat_slow_t_1), dim=1)
+        pred_t_1 = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t_1)))
+        
+        return pred_t, pred_t_1
 
 def train_and_evaluate():
     t_start = time.time()
