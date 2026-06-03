@@ -79,42 +79,84 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
-class BatteryMultiBranchNet(nn.Module):
-    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
-        super(BatteryMultiBranchNet, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)      
-        self.relu = nn.ReLU()
-        self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
-        self.cnn_dropout = nn.Dropout(p=dropout)
-        
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
-        self.drop_fast = nn.Dropout(p=dropout)
+class BatteryAttentionFusionNet(nn.Module):
+    def __init__(self, input_size, fast_channels=32, fast_hidden=64, slow_hidden=64, attn_heads=4, dropout=0.25):
+        super(BatteryAttentionFusionNet, self).__init__()
+        self.fast_conv = nn.Conv1d(in_channels=input_size, out_channels=fast_channels, kernel_size=3, padding=1)
+        self.fast_pool = nn.MaxPool1d(kernel_size=2, stride=2)
+        self.fast_norm = nn.LayerNorm(fast_channels)
+        self.fast_lstm = nn.LSTM(input_size=fast_channels, hidden_size=fast_hidden, batch_first=True, num_layers=1)
+        self.slow_gru = nn.GRU(input_size=input_size, hidden_size=slow_hidden, batch_first=True, num_layers=1)
 
-        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
-        self.drop_slow = nn.Dropout(p=dropout)
+        self.fast2attn = nn.Linear(fast_hidden, slow_hidden)
 
-        self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
-        self.relu_fusion = nn.ReLU()
-        self.fc_out = nn.Linear(32, 1)
+        self.attn = nn.MultiheadAttention(embed_dim=slow_hidden, num_heads=attn_heads, batch_first=True, dropout=dropout)
+
+        self.context_gate = nn.Sequential(
+            nn.Linear(4, slow_hidden),
+            nn.SiLU(),
+            nn.Linear(slow_hidden, slow_hidden),
+            nn.Sigmoid()
+        )
+
+        fused_dim = fast_hidden + slow_hidden
+        self.fusion = nn.Sequential(
+            nn.LayerNorm(fused_dim),
+            nn.Linear(fused_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 32),
+            nn.ReLU()
+        )
+        self.head = nn.Linear(32, 1)
+
+    def _current_stats(self, segment):
+        mean = segment.mean(dim=1)
+        std = segment.std(dim=1, unbiased=False)
+        max_val = segment.max(dim=1).values
+        min_val = segment.min(dim=1).values
+        return torch.stack([mean, std, max_val, min_val], dim=1)
+
+    def _apply_attention(self, fast_feat, slow_seq, stats):
+        query = self.fast2attn(fast_feat).unsqueeze(1)
+        attn_out, _ = self.attn(query, slow_seq, slow_seq)
+        attn_vec = attn_out.squeeze(1)
+        gate = self.context_gate(stats)
+        return attn_vec * gate
 
     def forward(self, x_fast, x_slow):
-        xf = x_fast.permute(0, 2, 1)  
-        out_f = self.cnn_dropout(self.pool(self.relu(self.conv1(xf)))).permute(0, 2, 1)  
-        
-        lstm_f_out, _ = self.lstm_fast(out_f)
-        feat_fast_t   = self.drop_fast(lstm_f_out[:, -1, :])
-        feat_fast_t_1 = self.drop_fast(lstm_f_out[:, -2, :]) 
+        xf = x_fast.permute(0, 2, 1)
+        fast_conv = torch.relu(self.fast_conv(xf))
+        fast_conv = self.fast_pool(fast_conv)
+        fast_conv = fast_conv.permute(0, 2, 1)
+        fast_conv = self.fast_norm(fast_conv)
+        fast_out, _ = self.fast_lstm(fast_conv)
 
-        lstm_s_out, _ = self.lstm_slow(x_slow)
-        feat_slow_t   = self.drop_slow(lstm_s_out[:, -1, :])
-        feat_slow_t_1 = self.drop_slow(lstm_s_out[:, -2, :]) 
+        slow_out, _ = self.slow_gru(x_slow)
 
-        combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
-        pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
-        
-        combined_t_1 = torch.cat((feat_fast_t_1, feat_slow_t_1), dim=1)
-        pred_t_1 = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t_1)))
-        
+        feat_fast_t = fast_out[:, -1, :]
+        feat_fast_t_1 = fast_out[:, -2, :]
+
+        feat_slow_t = slow_out[:, -1, :]
+        feat_slow_t_1 = slow_out[:, -2, :]
+
+        curr_t = x_fast[:, -5:, 1]
+        curr_t_1 = x_fast[:, -6:-1, 1]
+        stats_t = self._current_stats(curr_t)
+        stats_t_1 = self._current_stats(curr_t_1)
+
+        attn_t = self._apply_attention(feat_fast_t, slow_out, stats_t)
+        attn_t_1 = self._apply_attention(feat_fast_t_1, slow_out, stats_t_1)
+
+        combined_t = torch.cat((feat_fast_t, attn_t), dim=1)
+        combined_t_1 = torch.cat((feat_fast_t_1, attn_t_1), dim=1)
+
+        fused_t = self.fusion(combined_t)
+        fused_t_1 = self.fusion(combined_t_1)
+
+        pred_t = self.head(fused_t)
+        pred_t_1 = self.head(fused_t_1)
+
         return pred_t, pred_t_1
 
 # ==========================================
@@ -136,7 +178,7 @@ def train_and_evaluate():
                              batch_size=128, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = BatteryMultiBranchNet(input_size=5).to(device)
+    model = BatteryAttentionFusionNet(input_size=5).to(device)
     
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
