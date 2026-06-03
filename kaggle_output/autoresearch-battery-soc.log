@@ -1,24 +1,7 @@
-[{"stream_name":"stdout","time":15.18432787,"data":"Caricamento dati da /kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx...\n"}
-,{"stream_name":"stdout","time":18.234954675,"data":"Traceback (most recent call last):\n"}
-,{"stream_name":"stdout","time":18.235015426,"data":"  File \"/kaggle/src/script.py\", line 274, in \u003cmodule\u003e\n"}
-,{"stream_name":"stdout","time":18.235207209,"data":"    train_and_evaluate()\n"}
-,{"stream_name":"stdout","time":18.235229353,"data":"  File \"/kaggle/src/script.py\", line 176, in train_and_evaluate\n"}
-,{"stream_name":"stdout","time":18.235568872,"data":"    model = BatteryMultiBranchNet(input_size=5).to(device)\n"}
-,{"stream_name":"stdout","time":18.235962705,"data":"            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"}
-,{"stream_name":"stdout","time":18.236097995,"data":"  File \"/kaggle/src/script.py\", line 131, in __init__\n"}
-,{"stream_name":"stdout","time":18.236175839,"data":"    self.transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=input_size, nhead=nhead, dim_feedforward=transformer_hidden, dropout=dropout)\n"}
-,{"stream_name":"stdout","time":18.237489761,"data":"                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"}
-,{"stream_name":"stdout","time":18.237567805,"data":"  File \"/usr/local/lib/python3.12/dist-packages/torch/nn/modules/transformer.py\", line 759, in __init__\n"}
-,{"stream_name":"stdout","time":18.23922887,"data":"    self.self_attn = MultiheadAttention(\n"}
-,{"stream_name":"stdout","time":18.239618904,"data":"                     ^^^^^^^^^^^^^^^^^^^\n"}
-,{"stream_name":"stdout","time":18.239646097,"data":"  File \"/usr/local/lib/python3.12/dist-packages/torch/nn/modules/activation.py\", line 1191, in __init__\n"}
-,{"stream_name":"stdout","time":18.241148253,"data":"    assert self.head_dim * num_heads == self.embed_dim, (\n"}
-,{"stream_name":"stdout","time":18.241524685,"data":"           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"}
-,{"stream_name":"stdout","time":18.241574844,"data":"AssertionError: embed_dim must be divisible by num_heads\n"}
-,{"stream_name":"stderr","time":23.003200652,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
-,{"stream_name":"stderr","time":23.003266469,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
-,{"stream_name":"stderr","time":23.32050077,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
-,{"stream_name":"stderr","time":23.320540683,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
-,{"stream_name":"stderr","time":24.098933811,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
-,{"stream_name":"stderr","time":25.648808397,"data":"[NbConvertApp] Writing 334724 bytes to __results__.html\n"}
+[{"stream_name":"stdout","time":13.956296424,"data":"Caricamento dati da /kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx...\n"}
+,{"stream_name":"stdout","time":23.138455945,"data":"\n"}
+,{"stream_name":"stdout","time":23.138520044,"data":"Inizio Addestramento su cuda - Parametri Modello: 0.13M\n"}
+,{"stream_name":"stdout","time":27.174474234,"data":"Epoch 001/300 | Train Loss: 0.23809 | Test MAE: 0.49959\n"}
+,{"stream_name":"stdout","time":138.811061932,"data":"Epoch 050/300 | Train Loss: 0.05787 | Test MAE: 0.48537\n"}
+,{"stream_name":"stdout","time":251.357229032,"data":"Epoch 100/300 | Train Loss: 0.04796 | Test MAE: 0.48992\n"}
 ]

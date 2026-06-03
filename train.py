@@ -105,16 +105,16 @@ class BatteryMultiBranchNet(nn.Module):
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout, bidirectional=True)
         self.drop_fast = nn.Dropout(p=dropout)
 
-        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout, bidirectional=True)
         self.drop_slow = nn.Dropout(p=dropout)
 
-        self.attention_fast = Attention(lstm_fast_hidden)
-        self.attention_slow = Attention(lstm_slow_hidden)
+        self.attention_fast = Attention(lstm_fast_hidden * 2)
+        self.attention_slow = Attention(lstm_slow_hidden * 2)
 
-        self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
+        self.fc_fusion = nn.Linear(lstm_fast_hidden * 2 + lstm_slow_hidden * 2, 32)
         self.relu_fusion = nn.ReLU()
         self.fc_out = nn.Linear(32, 1)
 
@@ -166,7 +166,7 @@ def train_and_evaluate():
 
     criterion = PhysicsInformedBMSLoss(lambda_penalty=0.1, current_zero_val=scaled_zero_amp, current_threshold=scaled_half_amp)
     
-    epoch_num = 300
+    epoch_num = 50
     total_steps = 0
     t_start_training = time.time()
     
