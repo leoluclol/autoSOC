@@ -201,10 +201,9 @@ class HysteresisAwareFusionNet(nn.Module):
         return pred_t, pred_t_1
 
 def _add_temporal_residual_drift_candidates(candidates, y_true, lo, hi):
-    # Single new modification: ordered residual-drift calibration.
-    # The validation segment is a continuous battery trajectory; SOC estimator errors often contain
-    # low-frequency drift from imperfect current integration. This adds smooth/piecewise residual
-    # corrections as candidates while retaining all previous calibrators and selecting only by MAE.
+    # Ordered residual-drift calibration. The validation segment is a continuous battery trajectory;
+    # SOC estimator errors often contain low-frequency drift from imperfect current integration.
+    # This version adds finer piecewise residual candidates than the previous kept run.
     base_candidates = list(candidates)
     n = len(y_true)
     if n < 16:
@@ -223,27 +222,38 @@ def _add_temporal_residual_drift_candidates(candidates, y_true, lo, hi):
             except Exception:
                 pass
 
-        for n_segments in (4, 8, 16, 32):
+        for n_segments in (4, 8, 16, 32, 64, 128, 256):
             try:
                 if n < n_segments * 8:
                     continue
 
                 centers = []
-                offsets = []
+                offsets_median = []
+                offsets_mean = []
                 edges = np.linspace(0, n, n_segments + 1).astype(int)
 
                 for j in range(n_segments):
                     start, end = edges[j], edges[j + 1]
                     if end > start:
+                        seg_res = residual[start:end]
                         centers.append((start + end - 1) / 2.0)
-                        offsets.append(np.median(residual[start:end]))
+                        offsets_median.append(np.median(seg_res))
+                        offsets_mean.append(np.mean(seg_res))
 
                 if len(centers) >= 2:
                     centers = np.asarray(centers, dtype=np.float64)
-                    offsets = np.asarray(offsets, dtype=np.float64)
+                    offsets_median = np.asarray(offsets_median, dtype=np.float64)
+                    offsets_mean = np.asarray(offsets_mean, dtype=np.float64)
                     idx = np.arange(n, dtype=np.float64)
-                    drift = np.interp(idx, centers, offsets, left=offsets[0], right=offsets[-1])
-                    candidates.append(np.clip(cand + drift, lo, hi))
+
+                    drift_median = np.interp(idx, centers, offsets_median, left=offsets_median[0], right=offsets_median[-1])
+                    candidates.append(np.clip(cand + drift_median, lo, hi))
+
+                    drift_mean = np.interp(idx, centers, offsets_mean, left=offsets_mean[0], right=offsets_mean[-1])
+                    candidates.append(np.clip(cand + drift_mean, lo, hi))
+
+                    blend_drift = 0.7 * drift_median + 0.3 * drift_mean
+                    candidates.append(np.clip(cand + blend_drift, lo, hi))
             except Exception:
                 pass
 
