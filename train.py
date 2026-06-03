@@ -165,12 +165,12 @@ def train_and_evaluate():
     train_loader = DataLoader(TensorDataset(torch.tensor(X_tr_f, dtype=torch.float32), 
                                             torch.tensor(X_tr_s, dtype=torch.float32), 
                                             torch.tensor(y_tr, dtype=torch.float32).view(-1, 1)), 
-                              batch_size=128, shuffle=True)
+                              batch_size=64, shuffle=True)  # Reduced batch size to 64
                               
     test_loader = DataLoader(TensorDataset(torch.tensor(X_te_f, dtype=torch.float32), 
                                            torch.tensor(X_te_s, dtype=torch.float32), 
                                            torch.tensor(y_te, dtype=torch.float32).view(-1, 1)), 
-                             batch_size=128, shuffle=False)
+                             batch_size=64, shuffle=False)  # Reduced batch size to 64
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = BatteryMultiBranchNet(input_size=5).to(device)
