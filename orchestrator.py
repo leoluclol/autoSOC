@@ -43,7 +43,7 @@ def extract_llm_text(ai_response):
     """Extracts everything from the LLM response EXCEPT the python code blocks"""
     ticks = "```"
     # Matches the code blocks including the backticks
-    pattern = ticks + r"(?:python)?\n.*??" + ticks
+    pattern = ticks + r"(?:python)?\n.*?" + ticks
     
     # Replace code blocks with an empty string (or a newline)
     cleaned_text = re.sub(pattern, "", ai_response, flags=re.DOTALL)
