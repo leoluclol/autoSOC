@@ -25,8 +25,8 @@ FEATURE_COLUMNS = [
 # ==========================================
 # 1. DATA PREPARATION
 # ==========================================
-def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_length=150, slow_step=5):
-    xs_fast, xs_slow, ys = [], [], []
+def create_multibranch_sequences(data, target, weights=None, fast_seq_length=100, slow_seq_length=150, slow_step=5):
+    xs_fast, xs_slow, ys, ws = [], [], [], []
     max_lookback = slow_seq_length * slow_step
 
     for i in range(max_lookback - 1, len(data)):
@@ -35,8 +35,13 @@ def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_len
         xs_fast.append(x_f)
         xs_slow.append(x_s)
         ys.append(target[i])
+        if weights is not None:
+            ws.append(weights[i])
 
-    return np.array(xs_fast), np.array(xs_slow), np.array(ys)
+    outputs = (np.array(xs_fast), np.array(xs_slow), np.array(ys))
+    if weights is not None:
+        outputs += (np.array(ws),)
+    return outputs
 
 def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx'):
     print(f"Loading data from {filename}...")
@@ -72,20 +77,28 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
         time_since[i] = counter
     df['time_since_dir_change'] = time_since
 
+    plateau_weight = 1.0 / (np.abs(df['dV_dt']) + 1e-3)
+    plateau_weight /= plateau_weight.mean()
+
     target_col = 'SOC'
     df = df.dropna(subset=FEATURE_COLUMNS + [target_col])
 
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(df[FEATURE_COLUMNS].values)
-    y_values = df[target_col].values
+    Y_values = df[target_col].values
+    weight_values = plateau_weight[df.index].to_numpy()
 
-    Xt_f, Xt_s, Yt = create_multibranch_sequences(X_scaled, y_values, fast_seq_length=100, slow_seq_length=150, slow_step=5)
+    Xt_f, Xt_s, Yt, Wt = create_multibranch_sequences(
+        X_scaled, Y_values, weights=weight_values,
+        fast_seq_length=100, slow_seq_length=150, slow_step=5
+    )
 
     split_idx = int(len(Xt_f) * 0.8)
     X_tr_f, X_tr_s, y_tr = Xt_f[:split_idx], Xt_s[:split_idx], Yt[:split_idx]
     X_te_f, X_te_s, y_te = Xt_f[split_idx:], Xt_s[split_idx:], Yt[split_idx:]
+    w_tr, w_te = Wt[:split_idx], Wt[split_idx:]
 
-    return X_tr_f, X_tr_s, y_tr, X_te_f, X_te_s, y_te, scaler
+    return X_tr_f, X_tr_s, y_tr, w_tr, X_te_f, X_te_s, y_te, w_te, scaler
 
 # ==========================================
 # 2. MODEL AND LOSS DEFINITION
@@ -93,13 +106,15 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
 class PhysicsInformedBMSLoss(nn.Module):
     def __init__(self, lambda_penalty=0.0, current_zero_val=0.0, current_threshold=0.05):
         super(PhysicsInformedBMSLoss, self).__init__()
-        self.mae = nn.L1Loss()
         self.lambda_penalty = lambda_penalty
         self.zero_val = current_zero_val
         self.threshold = current_threshold
 
-    def forward(self, pred_t, pred_t_1, y_true, current_t_scaled):
-        base_loss = self.mae(pred_t, y_true)
+    def forward(self, pred_t, pred_t_1, y_true, current_t_scaled, weight):
+        weight = weight.unsqueeze(1)
+        loss_nom = torch.sum(torch.abs(pred_t - y_true) * weight)
+        norm = torch.sum(weight) + 1e-8
+        base_loss = loss_nom / norm
         delta_pred = torch.abs(pred_t - pred_t_1)
         is_idle = (torch.abs(current_t_scaled - self.zero_val) < self.threshold).float().unsqueeze(1)
         physics_penalty = torch.mean(delta_pred * is_idle)
@@ -118,7 +133,7 @@ class HysteresisAwareFusionNet(nn.Module):
         self.slow_norm = nn.LayerNorm(slow_hidden)
 
         self.dir_gate = nn.Sequential(
-            nn.Linear(3, slow_hidden),
+            nn.Linear(4, slow_hidden),
             nn.SiLU(),
             nn.Linear(slow_hidden, slow_hidden),
             nn.Sigmoid()
@@ -134,7 +149,7 @@ class HysteresisAwareFusionNet(nn.Module):
         )
         self.head = nn.Linear(18, 1)
 
-    def _prepare_direction_gates(self, x_fast, idx_dir, idx_time):
+    def _prepare_direction_gates(self, x_fast, idx_dir, idx_time, idx_current):
         dir_t = x_fast[:, -1, idx_dir]
         dir_t_1 = x_fast[:, -2, idx_dir]
         time_since_t = x_fast[:, -1, idx_time] / 200.0
@@ -143,11 +158,16 @@ class HysteresisAwareFusionNet(nn.Module):
         hist_t = x_fast[:, -25:-5, idx_dir]
         hist_t_1 = x_fast[:, -26:-6, idx_dir]
 
+        curr_hist_t = x_fast[:, -25:-5, idx_current]
+        curr_hist_t_1 = x_fast[:, -26:-6, idx_current]
+
         dir_hist_t = hist_t.mean(dim=1)
         dir_hist_t_1 = hist_t_1.mean(dim=1)
+        curr_integral_t = curr_hist_t.sum(dim=1)
+        curr_integral_t_1 = curr_hist_t_1.sum(dim=1)
 
-        gate_t = self.dir_gate(torch.stack([dir_t, dir_hist_t, time_since_t], dim=1))
-        gate_t_1 = self.dir_gate(torch.stack([dir_t_1, dir_hist_t_1, time_since_t_1], dim=1))
+        gate_t = self.dir_gate(torch.stack([dir_t, dir_hist_t, time_since_t, curr_integral_t], dim=1))
+        gate_t_1 = self.dir_gate(torch.stack([dir_t_1, dir_hist_t_1, time_since_t_1, curr_integral_t_1], dim=1))
         return gate_t, gate_t_1
 
     def forward(self, x_fast, x_slow):
@@ -166,7 +186,8 @@ class HysteresisAwareFusionNet(nn.Module):
 
         idx_dir = FEATURE_COLUMNS.index('Current_dir')
         idx_time = FEATURE_COLUMNS.index('time_since_dir_change')
-        gate_t, gate_t_1 = self._prepare_direction_gates(x_fast, idx_dir, idx_time)
+        idx_current = FEATURE_COLUMNS.index('Current (A)')
+        gate_t, gate_t_1 = self._prepare_direction_gates(x_fast, idx_dir, idx_time, idx_current)
 
         gated_slow_t = slow_t * gate_t
         gated_slow_t_1 = slow_t_1 * gate_t_1
@@ -185,16 +206,18 @@ class HysteresisAwareFusionNet(nn.Module):
 def train_and_evaluate():
     t_start = time.time()
 
-    X_tr_f, X_tr_s, y_tr, X_te_f, X_te_s, y_te, scaler = process_and_split_data()
+    X_tr_f, X_tr_s, y_tr, w_tr, X_te_f, X_te_s, y_te, w_te, scaler = process_and_split_data()
 
     train_loader = DataLoader(TensorDataset(torch.tensor(X_tr_f, dtype=torch.float32),
                                             torch.tensor(X_tr_s, dtype=torch.float32),
-                                            torch.tensor(y_tr, dtype=torch.float32).view(-1, 1)),
+                                            torch.tensor(y_tr, dtype=torch.float32).view(-1, 1),
+                                            torch.tensor(w_tr, dtype=torch.float32)),
                               batch_size=96, shuffle=True)
 
     test_loader = DataLoader(TensorDataset(torch.tensor(X_te_f, dtype=torch.float32),
                                            torch.tensor(X_te_s, dtype=torch.float32),
-                                           torch.tensor(y_te, dtype=torch.float32).view(-1, 1)),
+                                           torch.tensor(y_te, dtype=torch.float32).view(-1, 1),
+                                           torch.tensor(w_te, dtype=torch.float32)),
                              batch_size=96, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -222,14 +245,15 @@ def train_and_evaluate():
         model.train()
         train_loss = 0.0
 
-        for batch_xf, batch_xs, batch_y in train_loader:
+        for batch_xf, batch_xs, batch_y, batch_w in train_loader:
             batch_xf, batch_xs, batch_y = batch_xf.to(device), batch_xs.to(device), batch_y.to(device)
+            batch_w = batch_w.to(device)
             optimizer.zero_grad()
 
             pred_t, pred_t_1 = model(batch_xf, batch_xs)
             current_t_scaled = batch_xf[:, -1, FEATURE_COLUMNS.index('Current (A)')]
 
-            loss = criterion(pred_t, pred_t_1, batch_y, current_t_scaled)
+            loss = criterion(pred_t, pred_t_1, batch_y, current_t_scaled, batch_w)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -240,7 +264,7 @@ def train_and_evaluate():
         model.eval()
         epoch_test_mae = 0.0
         with torch.no_grad():
-            for batch_xf_te, batch_xs_te, batch_y_te in test_loader:
+            for batch_xf_te, batch_xs_te, batch_y_te, _ in test_loader:
                 batch_xf_te, batch_xs_te, batch_y_te = batch_xf_te.to(device), batch_xs_te.to(device), batch_y_te.to(device)
                 pred_t_eval, _ = model(batch_xf_te, batch_xs_te)
                 epoch_test_mae += nn.L1Loss()(pred_t_eval, batch_y_te).item()
@@ -256,7 +280,7 @@ def train_and_evaluate():
     model.eval()
     all_y_pred, all_y_true = [], []
     with torch.no_grad():
-        for batch_xf_te, batch_xs_te, batch_y_te in test_loader:
+        for batch_xf_te, batch_xs_te, batch_y_te, _ in test_loader:
             batch_xf_te, batch_xs_te = batch_xf_te.to(device), batch_xs_te.to(device)
             pred_t_final, _ = model(batch_xf_te, batch_xs_te)
             all_y_pred.append(pred_t_final.cpu().numpy())
