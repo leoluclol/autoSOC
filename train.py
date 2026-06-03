@@ -91,16 +91,18 @@ class BatteryMultiBranchNet(nn.Module):
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, 
+                                 batch_first=True, dropout=dropout, bidirectional=True)
         self.drop_fast = nn.Dropout(p=dropout)
 
-        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, 
+                                 batch_first=True, dropout=dropout, bidirectional=True)
         self.drop_slow = nn.Dropout(p=dropout)
 
-        self.attention_fast = Attention(lstm_fast_hidden)
-        self.attention_slow = Attention(lstm_slow_hidden)
+        self.attention_fast = Attention(2 * lstm_fast_hidden)
+        self.attention_slow = Attention(2 * lstm_slow_hidden)
 
-        self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
+        self.fc_fusion = nn.Linear(2 * (lstm_fast_hidden + lstm_slow_hidden), 32)
         self.relu_fusion = nn.ReLU()
         self.fc_out = nn.Linear(32, 1)
 
