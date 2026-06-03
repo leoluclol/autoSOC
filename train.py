@@ -84,27 +84,19 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
-class TransformerEncoderLayer(nn.Module):
-    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
-        super(TransformerEncoderLayer, self).__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.linear1 = nn.Linear(d_model, dim_feedforward)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(dim_feedforward, d_model)
-
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
+class TransformerEncoderBlock(nn.Module):
+    def __init__(self, d_model, nhead, dim_feedforward=256, dropout=0.05, num_layers=2):
+        super(TransformerEncoderBlock, self).__init__()
+        self.layers = nn.ModuleList(
+            [nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward, dropout=dropout)
+             for _ in range(num_layers)]
+        )
+        self.norm = nn.LayerNorm(d_model)
 
     def forward(self, src):
-        src2 = self.self_attn(src, src, src)[0]
-        src = src + self.dropout1(src2)
-        src = self.norm1(src)
-        src2 = self.linear2(self.dropout(torch.relu(self.linear1(src))))
-        src = src + self.dropout2(src2)
-        src = self.norm2(src)
-        return src
+        for layer in self.layers:
+            src = layer(src)
+        return self.norm(src)
 
 class BatteryMultiBranchNet(nn.Module):
     def __init__(self, input_size, cnn_out_channels=64, lstm_slow_hidden=64, dropout=0.3):
@@ -114,7 +106,7 @@ class BatteryMultiBranchNet(nn.Module):
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
-        self.transformer_encoder = TransformerEncoderLayer(d_model=cnn_out_channels, nhead=4)
+        self.transformer_encoder = TransformerEncoderBlock(d_model=cnn_out_channels, nhead=4, dropout=0.05, num_layers=2)
         
         self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
         self.drop_slow = nn.Dropout(p=dropout)
