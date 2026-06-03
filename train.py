@@ -98,6 +98,16 @@ class TransformerEncoderBlock(nn.Module):
             src = layer(src)
         return self.norm(src)
 
+class AttentionMechanism(nn.Module):
+    def __init__(self, hidden_size):
+        super(AttentionMechanism, self).__init__()
+        self.attention = nn.Linear(hidden_size, 1)
+
+    def forward(self, lstm_output):
+        attn_weights = torch.softmax(self.attention(lstm_output), dim=1)
+        weighted_output = lstm_output * attn_weights
+        return weighted_output.sum(dim=1)
+
 class BatteryMultiBranchNet(nn.Module):
     def __init__(self, input_size, cnn_out_channels=64, lstm_slow_hidden=64, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
@@ -109,6 +119,7 @@ class BatteryMultiBranchNet(nn.Module):
         self.transformer_encoder = TransformerEncoderBlock(d_model=cnn_out_channels, nhead=4, dropout=0.05, num_layers=2)
         
         self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.attention = AttentionMechanism(lstm_slow_hidden)
         self.drop_slow = nn.Dropout(p=dropout)
 
         self.fc_fusion = nn.Linear(cnn_out_channels + lstm_slow_hidden, 32)
@@ -123,7 +134,7 @@ class BatteryMultiBranchNet(nn.Module):
         feat_fast_t = transformer_out.mean(dim=0)  # Aggregate over sequence length
         
         lstm_s_out, _ = self.lstm_slow(x_slow)
-        feat_slow_t = lstm_s_out[:, -1, :]  # Last output of the LSTM
+        feat_slow_t = self.attention(lstm_s_out)  # Apply attention mechanism
 
         combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
         pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))

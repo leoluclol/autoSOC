@@ -52,10 +52,9 @@ def run_bash(command):
 # ==========================================
 def run_kaggle_pipeline():
     """Esegue il push su Kaggle, attende la fine, e scarica i log"""
-    print("🚀 Push del codice su Kaggle Cloud...")
     run_bash("kaggle kernels push -p . --accelerator NvidiaTeslaT4")
     
-    print("⏳ Attesa del completamento del training (polling ogni 60s)...")
+    print("Training in corso")
     while True:
         status_output = run_bash(f"kaggle kernels status {KAGGLE_USER_SLUG}")
         print(f"[Kaggle API] {status_output.strip()}")
@@ -63,9 +62,9 @@ def run_kaggle_pipeline():
         # Controlla se lo status indica che la run ha finito di girare
         if "complete" in status_output.lower() or "error" in status_output.lower() or "cancel" in status_output.lower():
             break
-        time.sleep(60)
+        time.sleep(30)
         
-    print("📥 Download dei risultati...")
+    print("Download del log")
     run_bash("mkdir -p kaggle_output")
     # Pulisce i log vecchi per evitare di leggere output di run precedenti
     run_bash("rm -f ./kaggle_output/autoresearch-battery-soc.log") 
@@ -116,11 +115,11 @@ def main_loop():
     
     iteration = 1
     while True:
-        print(f"\n{'='*40}\n🔄 ITERAZIONE {iteration}\n{'='*40}")
+        print(f"\n{'='*40}\nITERAZIONE {iteration}\n{'='*40}")
         current_train_py = read_file("train.py")
         
         # 1. Chiediamo all'LLM di pensare e scrivere il nuovo codice
-        print("🧠 L'Agente sta pensando e modificando l'architettura...")
+        print("L'Agente sta pensando")
         prompt = f"Ecco il codice attuale di train.py:\n```python\n{current_train_py}\n```\nQual è la tua prossima mossa?"
         conversation_history.append({"role": "user", "content": prompt})
         
@@ -131,6 +130,7 @@ def main_loop():
             temperature=0.7
         )
         ai_message = response.choices[0].message.content
+        print(ai_message)
         conversation_history.append({"role": "assistant", "content": ai_message})
         
         # 2. Estraiamo e salviamo il codice, poi facciamo il commit
@@ -157,15 +157,14 @@ def main_loop():
         
         if current_mae == 0.0:
             status = "crash"
-            print("❌ Il training su Kaggle è andato in crash.")
-            run_bash("git reset HEAD~1 --hard") # Rollback immediato
+            print("Il training su Kaggle è andato in crash")
+            run_bash("git reset HEAD~1 --hard") # Rollback
         elif current_mae < best_mae:
             status = "keep"
-            print(f"✅ MIGLIORAMENTO! Nuovo MAE: {current_mae} (precedente: {best_mae})")
-            # Nessun rollback, manteniamo il commit
+            print(f"MIGLIORAMENTO! Nuovo MAE: {current_mae} (precedente: {best_mae})")
         else:
             status = "discard"
-            print(f"📉 Nessun miglioramento (MAE: {current_mae}). Rollback in corso...")
+            print(f"Nessun miglioramento (MAE: {current_mae})")
             run_bash("git reset HEAD~1 --hard") # Rollback
             
         # 5. Salviamo nel TSV
@@ -188,4 +187,4 @@ if __name__ == "__main__":
     try:
         main_loop()
     except KeyboardInterrupt:
-        print("\n⏹️ Esecuzione interrotta manualmente dall'utente.")
+        print("\nEsecuzione interrotta manualmente dall'utente.")
