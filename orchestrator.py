@@ -150,7 +150,10 @@ def main_loop():
             )
             ai_message = response.output_text
 
-        print(extract_llm_text(ai_message))
+        with open("llm_chat_log.txt", "a") as file:
+            file.write(extract_llm_text(ai_message))
+            file.write("\n")
+            
         conversation_history.append({"role": "assistant", "content": ai_message})
         
         # 2. Extract and save the code, then commit
