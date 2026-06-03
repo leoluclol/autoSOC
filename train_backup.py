@@ -1,8 +1,3 @@
-"""
-Autoresearch pretraining script per LSTM Multi-Branch (PINN).
-Script unificato, attimizzato per l'esecuzione su Kaggle Cloud.
-"""
-
 import os
 import time
 import numpy as np
@@ -13,11 +8,11 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler
 
-# Assicura che Kaggle possa leggere i file .xlsx senza crashare
+# Ensures Kaggle can read .xlsx files without crashing
 os.system('pip install openpyxl -q')
 
 # ==========================================
-# 1. PREPARAZIONE DEI DATI
+# 1. DATA PREPARATION
 # ==========================================
 def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_length=150, slow_step=5):
     xs_fast, xs_slow, ys = [], [], []
@@ -33,7 +28,7 @@ def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_len
     return np.array(xs_fast), np.array(xs_slow), np.array(ys)
 
 def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx'):
-    print(f"Caricamento dati da {filename}...")
+    print(f"Loading data from {filename}...")
     df = pd.read_excel(filename, sheet_name='Temp_25C')
     df = df.drop_duplicates(subset=['Time (s)'], keep='first') 
     
@@ -66,7 +61,7 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
     return X_tr_f, X_tr_s, y_tr, X_te_f, X_te_s, y_te, scaler
 
 # ==========================================
-# 2. DEFINIZIONE DEL MODELLO E DELLA LOSS
+# 2. MODEL AND LOSS DEFINITION
 # ==========================================
 class PhysicsInformedBMSLoss(nn.Module):
     def __init__(self, lambda_penalty=0.0, current_zero_val=0.0, current_threshold=0.05):
@@ -123,7 +118,7 @@ class BatteryMultiBranchNet(nn.Module):
         return pred_t, pred_t_1
 
 # ==========================================
-# 3. LOOP DI ADDESTRAMENTO CON METRICHE
+# 3. TRAINING LOOP WITH METRICS
 # ==========================================
 def train_and_evaluate():
     t_start = time.time()
@@ -159,7 +154,7 @@ def train_and_evaluate():
     total_steps = 0
     t_start_training = time.time()
     
-    print(f"\nInizio Addestramento su {device} - Parametri Modello: {num_params / 1e6:.2f}M")
+    print(f"\nStarting Training on {device} - Model Parameters: {num_params / 1e6:.2f}M")
     
     for epoch in range(epoch_num):
         model.train()
@@ -197,7 +192,7 @@ def train_and_evaluate():
     training_time = time.time() - t_start_training
 
     # ==========================================
-    # 4. VALUTAZIONE FINALE E METRICHE
+    # 4. FINAL EVALUATION AND METRICS
     # ==========================================
     model.eval()
     all_y_pred, all_y_true = [], []
@@ -225,7 +220,7 @@ def train_and_evaluate():
     print("\n" + "="*40)
     print("FINAL EVALUATION METRICS")
     print("="*40)
-    # Rimosso il simbolo % e le stringhe MB/s per facilitare il parsing dell'LLM
+    # Removed the % symbol and MB/s strings to ease LLM parsing
     print(f"test_mae_percent:   {mae * 100:.4f}")
     print(f"test_rmse_percent:  {rmse * 100:.4f}")
     print(f"max_error_percent:  {max_err * 100:.4f}")
@@ -242,4 +237,4 @@ if __name__ == "__main__":
     try:
         train_and_evaluate()
     except FileNotFoundError:
-        print("Errore: Dataset non trovato. Verifica di essere su Kaggle e controlla il path.")
+        print("Error: Dataset not found. Verify that you are on Kaggle and check the path.")

@@ -1,8 +1,3 @@
-"""
-Autoresearch pretraining script per LSTM Multi-Branch (PINN).
-Script unificato, attimizzato per l'esecuzione su Kaggle Cloud.
-"""
-
 import os
 import time
 import numpy as np
@@ -13,11 +8,11 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler
 
-# Assicura che Kaggle possa leggere i file .xlsx senza crashare
+# Ensures Kaggle can read .xlsx files without crashing
 os.system('pip install openpyxl -q')
 
 # ==========================================
-# 1. PREPARAZIONE DEI DATI
+# 1. DATA PREPARATION
 # ==========================================
 def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_length=150, slow_step=5):
     xs_fast, xs_slow, ys = [], [], []
@@ -33,7 +28,7 @@ def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_len
     return np.array(xs_fast), np.array(xs_slow), np.array(ys)
 
 def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx'):
-    print(f"Caricamento dati da {filename}...")
+    print(f"Loading data from {filename}...")
     df = pd.read_excel(filename, sheet_name='Temp_25C')
     df = df.drop_duplicates(subset=['Time (s)'], keep='first') 
     
@@ -66,7 +61,7 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
     return X_tr_f, X_tr_s, y_tr, X_te_f, X_te_s, y_te, scaler
 
 # ==========================================
-# 2. DEFINIZIONE DEL MODELLO E DELLA LOSS
+# 2. MODEL AND LOSS DEFINITION
 # ==========================================
 class PhysicsInformedBMSLoss(nn.Module):
     def __init__(self, lambda_penalty=0.0, current_zero_val=0.0, current_threshold=0.05):
@@ -84,65 +79,46 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
-class TransformerEncoderBlock(nn.Module):
-    def __init__(self, d_model, nhead, dim_feedforward=256, dropout=0.05, num_layers=2):
-        super(TransformerEncoderBlock, self).__init__()
-        self.layers = nn.ModuleList(
-            [nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward, dropout=dropout)
-             for _ in range(num_layers)]
-        )
-        self.norm = nn.LayerNorm(d_model)
-
-    def forward(self, src):
-        for layer in self.layers:
-            src = layer(src)
-        return self.norm(src)
-
-class AttentionMechanism(nn.Module):
-    def __init__(self, hidden_size):
-        super(AttentionMechanism, self).__init__()
-        self.attention = nn.Linear(hidden_size, 1)
-
-    def forward(self, lstm_output):
-        attn_weights = torch.softmax(self.attention(lstm_output), dim=1)
-        weighted_output = lstm_output * attn_weights
-        return weighted_output.sum(dim=1)
-
 class BatteryMultiBranchNet(nn.Module):
-    def __init__(self, input_size, cnn_out_channels=64, lstm_slow_hidden=64, dropout=0.3):
+    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
         self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)      
         self.relu = nn.ReLU()
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
-        self.transformer_encoder = TransformerEncoderBlock(d_model=cnn_out_channels, nhead=4, dropout=0.05, num_layers=2)
-        
+        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.drop_fast = nn.Dropout(p=dropout)
+
         self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
-        self.attention = AttentionMechanism(lstm_slow_hidden)
         self.drop_slow = nn.Dropout(p=dropout)
 
-        self.fc_fusion = nn.Linear(cnn_out_channels + lstm_slow_hidden, 32)
+        self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
         self.relu_fusion = nn.ReLU()
         self.fc_out = nn.Linear(32, 1)
 
     def forward(self, x_fast, x_slow):
         xf = x_fast.permute(0, 2, 1)  
-        out_f = self.cnn_dropout(self.pool(self.relu(self.conv1(xf)))).permute(2, 0, 1)  # [seq_len, batch, channels]
+        out_f = self.cnn_dropout(self.pool(self.relu(self.conv1(xf)))).permute(0, 2, 1)  
         
-        transformer_out = self.transformer_encoder(out_f)
-        feat_fast_t = transformer_out.mean(dim=0)  # Aggregate over sequence length
-        
+        lstm_f_out, _ = self.lstm_fast(out_f)
+        feat_fast_t   = self.drop_fast(lstm_f_out[:, -1, :])
+        feat_fast_t_1 = self.drop_fast(lstm_f_out[:, -2, :]) 
+
         lstm_s_out, _ = self.lstm_slow(x_slow)
-        feat_slow_t = self.attention(lstm_s_out)  # Apply attention mechanism
+        feat_slow_t   = self.drop_slow(lstm_s_out[:, -1, :])
+        feat_slow_t_1 = self.drop_slow(lstm_s_out[:, -2, :]) 
 
         combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
         pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
         
-        return pred_t, pred_t  # Return the same value for simplicity
+        combined_t_1 = torch.cat((feat_fast_t_1, feat_slow_t_1), dim=1)
+        pred_t_1 = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t_1)))
+        
+        return pred_t, pred_t_1
 
 # ==========================================
-# 3. LOOP DI ADDESTRAMENTO CON METRICHE
+# 3. TRAINING LOOP WITH METRICS
 # ==========================================
 def train_and_evaluate():
     t_start = time.time()
@@ -178,7 +154,7 @@ def train_and_evaluate():
     total_steps = 0
     t_start_training = time.time()
     
-    print(f"\nInizio Addestramento su {device} - Parametri Modello: {num_params / 1e6:.2f}M")
+    print(f"\nStarting Training on {device} - Model Parameters: {num_params / 1e6:.2f}M")
     
     for epoch in range(epoch_num):
         model.train()
@@ -216,7 +192,7 @@ def train_and_evaluate():
     training_time = time.time() - t_start_training
 
     # ==========================================
-    # 4. VALUTAZIONE FINALE E METRICHE
+    # 4. FINAL EVALUATION AND METRICS
     # ==========================================
     model.eval()
     all_y_pred, all_y_true = [], []
@@ -244,7 +220,7 @@ def train_and_evaluate():
     print("\n" + "="*40)
     print("FINAL EVALUATION METRICS")
     print("="*40)
-    # Rimosso il simbolo % e le stringhe MB/s per facilitare il parsing dell'LLM
+    # Removed the % symbol and MB/s strings to ease LLM parsing
     print(f"test_mae_percent:   {mae * 100:.4f}")
     print(f"test_rmse_percent:  {rmse * 100:.4f}")
     print(f"max_error_percent:  {max_err * 100:.4f}")
@@ -261,4 +237,4 @@ if __name__ == "__main__":
     try:
         train_and_evaluate()
     except FileNotFoundError:
-        print("Errore: Dataset non trovato. Verifica di essere su Kaggle e controlla il path.")
+        print("Error: Dataset not found. Verify that you are on Kaggle and check the path.")

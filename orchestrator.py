@@ -6,35 +6,32 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 # ==========================================
-# 1. CONFIGURAZIONE INIZIALE
+# 1. INITIAL CONFIG
 # ==========================================
-# Carica le variabili d'ambiente dal file .env (inclusa OPENAI_API_KEY)
 load_dotenv()
 
-# Inizializza il client OpenAI
+# Loads openai client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Sostituisci con i tuoi veri dati Kaggle presenti nel kernel-metadata.json
+# Kaggle dataset location
 KAGGLE_USER_SLUG = "leonardoluchini/autoresearch-battery-soc" 
 
 # ==========================================
-# 2. FUNZIONI DI UTILITA'
+# 2. UTILITIES
 # ==========================================
 def read_file(filepath):
-    """Legge il contenuto di un file testuale."""
+    """Reads a text file's content"""
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
 
 def write_file(filepath, content):
-    """Scrive il contenuto in un file testuale."""
+    """Writes content to a file"""
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
 
 def extract_python_code(ai_response):
-    """Estrae solo il codice Python dalla risposta testuale dell'LLM"""
-    # Usiamo una variabile per i backtick così l'IDE non si confonde 
-    # e il copia-incolla non si rompe.
-    ticks = "```"
+    """Extracts python code from the LLM response"""
+    ticks = "```" # Avoids breaking when talking to LLMs
     pattern = ticks + r"(?:python)?\n(.*?)" + ticks
     
     match = re.search(pattern, ai_response, re.DOTALL)
@@ -43,47 +40,43 @@ def extract_python_code(ai_response):
     return ai_response.strip()
 
 def run_bash(command):
-    """Esegue un comando nel terminale locale e restituisce l'output"""
+    """Executes a bash command and returns the output"""
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return result.stdout + "\n" + result.stderr
 
 # ==========================================
-# 3. INTERAZIONE CON KAGGLE CLOUD
+# 3. KAGGLE CLOUD INTERACTION
 # ==========================================
 def run_kaggle_pipeline():
-    """Esegue il push su Kaggle, attende la fine, e scarica i log"""
+    """Pushes code to Kaggle for training and waits for the end of training log"""
     run_bash("kaggle kernels push -p . --accelerator NvidiaTeslaT4")
     
-    print("Training in corso")
+    print("Training in progress")
     while True:
         status_output = run_bash(f"kaggle kernels status {KAGGLE_USER_SLUG}")
         print(f"[Kaggle API] {status_output.strip()}")
         
-        # Controlla se lo status indica che la run ha finito di girare
+        # Checks run status
         if "complete" in status_output.lower() or "error" in status_output.lower() or "cancel" in status_output.lower():
             break
         time.sleep(30)
         
-    print("Download del log")
-    run_bash("mkdir -p kaggle_output")
-    # Pulisce i log vecchi per evitare di leggere output di run precedenti
-    run_bash("rm -f ./kaggle_output/autoresearch-battery-soc.log") 
-    
-    # Questo comando scarica tutto il contenuto di /kaggle/working/ dentro ./kaggle_output/
-    run_bash(f"kaggle kernels output {KAGGLE_USER_SLUG} -p ./kaggle_output")
-    
-    # Il file prodotto dal nostro script train.py si troverà qui:
+    print("Log download")
+    run_bash("mkdir -p kaggle_output") # Creates log directory if it does not exist
+    run_bash("rm -f ./kaggle_output/autoresearch-battery-soc.log") # Cleans log directory
+    run_bash(f"kaggle kernels output {KAGGLE_USER_SLUG} -p ./kaggle_output") # Downloads new log
     log_path = "./kaggle_output/autoresearch-battery-soc.log"
     
     if os.path.exists(log_path):
         return read_file(log_path)
     
-    return "Errore: autoresearch-battery-soc.log non trovato nella cartella scaricata. Kaggle potrebbe essere andato in Timeout o in OOM prima di avviare Python."
+    return "Error: autoresearch-battery-soc.log not found"
+
 # ==========================================
-# 4. GESTIONE DELLE METRICHE
+# 4. METRICS MANAGEMENT
 # ==========================================
 def get_best_metric_from_tsv():
-    """Legge il results.tsv per capire qual è il record (MAE) da battere"""
+    """Finds best MAE on results.tsv"""
     if not os.path.exists("results.tsv"):
         write_file("results.tsv", "commit\ttest_mae\tmemory_gb\tstatus\tdescription\n")
         return float('inf')
@@ -102,30 +95,32 @@ def get_best_metric_from_tsv():
     return best_mae
 
 # ==========================================
-# 5. LOOP PRINCIPALE (L'AGENTE)
+# 5. MAIN LOOP (THE AGENT)
 # ==========================================
 def main_loop():
     program_instructions = read_file("program.md")
     
-    # Inizializza la memoria dell'agente
+    # Initializes the agent's memory
     conversation_history = [
         {"role": "system", "content": program_instructions},
-        {"role": "user", "content": "Iniziamo l'esperimento. Leggi il train.py attuale e proponi la tua prima modifica strutturale. Rispondi SOLO con il nuovo codice completo dentro un blocco ```python"}
+        {"role": "user", "content": "Let's start the experiment. Read the current train.py and propose your first structural modification. Respond ONLY with the new complete code inside a ```python block."}
     ]
     
     iteration = 1
     while True:
-        print(f"\n{'='*40}\nITERAZIONE {iteration}\n{'='*40}")
+        print(f"\n{'='*40}\nITERATION {iteration}\n{'='*40}")
         current_train_py = read_file("train.py")
         
-        # 1. Chiediamo all'LLM di pensare e scrivere il nuovo codice
-        print("L'Agente sta pensando")
-        prompt = f"Ecco il codice attuale di train.py:\n```python\n{current_train_py}\n```\nQual è la tua prossima mossa?"
+        llm_model = "gpt-4o"
+
+        # 1. Ask the LLM to think and write the new code
+        print(llm_model + " is thinking")
+        prompt = f"Here is the current code of train.py:\n```python\n{current_train_py}\n```\nWhat is your next move?"
         conversation_history.append({"role": "user", "content": prompt})
         
-        # Chiamata API all'LLM
+        # API Call to the LLM
         response = client.chat.completions.create(
-            model="gpt-4o", 
+            model=llm_model, 
             messages=conversation_history,
             temperature=0.7
         )
@@ -133,20 +128,20 @@ def main_loop():
         print(ai_message)
         conversation_history.append({"role": "assistant", "content": ai_message})
         
-        # 2. Estraiamo e salviamo il codice, poi facciamo il commit
+        # 2. Extract and save the code, then commit
         new_code = extract_python_code(ai_message)
         write_file("train.py", new_code)
         
-        commit_msg = f"Auto-run iterazione {iteration}"
+        commit_msg = f"Auto-run iteration {iteration}"
         run_bash(f'git commit -am "{commit_msg}"')
         commit_hash = run_bash("git rev-parse --short HEAD").strip()
         
-        # 3. Lanciamo la pipeline su Kaggle
+        # 3. Launch the pipeline on Kaggle
         run_log = run_kaggle_pipeline()
 
         print(run_log)
         
-        # 4. Valutiamo i risultati estraendo le metriche dal log
+        # 4. Evaluate results by extracting metrics from the log
         test_mae_match = re.search(r"test_mae_percent:\s+([0-9.]+)", run_log)
         vram_match = re.search(r"peak_vram_mb:\s+([0-9.]+)", run_log)
         
@@ -157,28 +152,28 @@ def main_loop():
         
         if current_mae == 0.0:
             status = "crash"
-            print("Il training su Kaggle è andato in crash")
+            print("Kaggle training has crashed")
             run_bash("git reset HEAD~1 --hard") # Rollback
         elif current_mae < best_mae:
             status = "keep"
-            print(f"MIGLIORAMENTO! Nuovo MAE: {current_mae} (precedente: {best_mae})")
+            print(f"IMPROVEMENT! New MAE: {current_mae} (previous: {best_mae})")
         else:
             status = "discard"
-            print(f"Nessun miglioramento (MAE: {current_mae})")
+            print(f"No improvement (MAE: {current_mae})")
             run_bash("git reset HEAD~1 --hard") # Rollback
             
-        # 5. Salviamo nel TSV
-        tsv_line = f"{commit_hash}\t{current_mae:.4f}\t{vram_gb:.1f}\t{status}\tIterazione {iteration}\n"
+        # 5. Save to TSV
+        tsv_line = f"{commit_hash}\t{current_mae:.4f}\t{vram_gb:.1f}\t{status}\tIteration {iteration}\n"
         with open("results.tsv", "a") as f:
             f.write(tsv_line)
             
-        # 6. Diamo il feedback all'LLM per il prossimo loop
-        # Passiamo solo gli ultimi 1500 caratteri del log per risparmiare token
-        feedback = f"Risultato della run su Kaggle:\n{run_log[-1500:]}\nStatus: {status}."
+        # 6. Provide feedback to the LLM for the next loop
+        # Pass only the last 1500 characters of the log to save tokens
+        feedback = f"Result of the Kaggle run:\n{run_log[-1500:]}\nStatus: {status}."
         if status == "crash":
-            feedback += "\nIl codice ha generato un errore o Kaggle è andato in OOM. Correggi il bug o semplifica l'architettura."
+            feedback += "\nThe code generated an error or Kaggle went OOM. Fix the bug or simplify the architecture."
         elif status == "discard":
-            feedback += "\nLe tue modifiche hanno peggiorato o non migliorato le metriche. Il codice è stato ripristinato alla versione precedente. Prova un'altra strada."
+            feedback += "\nYour modifications worsened or did not improve the metrics. The code has been rolled back to the previous version. Try another approach."
             
         conversation_history.append({"role": "user", "content": feedback})
         iteration += 1
@@ -187,4 +182,4 @@ if __name__ == "__main__":
     try:
         main_loop()
     except KeyboardInterrupt:
-        print("\nEsecuzione interrotta manualmente dall'utente.")
+        print("\nExecution manually interrupted by the user.")

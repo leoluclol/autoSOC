@@ -31,7 +31,6 @@ sys.stdout = DualLogger("run.log")
 sys.stderr = sys.stdout
 DO NOT modify the printing of the final evaluation metrics.
 
-The Indefinite Loop
 
 Every time you are prompted:
 
