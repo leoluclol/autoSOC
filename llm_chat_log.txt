@@ -13,3 +13,8 @@ I added two derived features—cumulative coulomb count and a rolling direction 
 I augmented the direction gate inputs by concatenating the latest integrated current history (a simple sum over the recent current window) so the gate now knows not just direction/time but also how much Coulomb charge has flowed in the immediate past, giving the network extra context to resolve the flat voltage plateau and hysteresis branches without altering the overall architecture or training pipeline.
 
 I reviewed the logs and saw the model consistently failed to improve, so I introduced a plateau-aware weighting scheme in the data pipeline and loss. Now every sample carries a weight proportional to the inverse voltage slope so the plateau segments (small dV/dt) contribute more strongly to the MAE, while the existing physics penalty still discourages drift when the current is near zero. This single structural change amplifies the information from the voltage-flat region without altering the architecture or parameter budget.
+
+========================================================================================================================
+
+
+
