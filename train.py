@@ -41,23 +41,20 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
     
     df = df.dropna(subset=features_cols + [target_col]).reset_index(drop=True)
     
-    # --- FIX 1: Split raw data chronologically FIRST ---
     split_idx = int(len(df) * 0.8)
     train_df = df.iloc[:split_idx].copy()
     test_df = df.iloc[split_idx:].copy()
     
-    # --- FIX 2: Fit scaler ONLY on training data ---
     scaler = MinMaxScaler()
     X_train_raw = train_df[features_cols].values
     X_test_raw = test_df[features_cols].values
     
     X_train_scaled = scaler.fit_transform(X_train_raw)
-    X_test_scaled = scaler.transform(X_test_raw) # Crucial: only transform the test set
+    X_test_scaled = scaler.transform(X_test_raw)
     
     y_train_val = train_df[target_col].values
     y_test_val = test_df[target_col].values
     
-    # --- FIX 3: Generate windows independently to avoid overlap leakage ---
     X_tr_f, X_tr_s, y_tr = create_multibranch_sequences(
         X_train_scaled, y_train_val, fast_seq_length=100, slow_seq_length=150, slow_step=5
     )
@@ -83,67 +80,35 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
-class Attention(nn.Module):
-    def __init__(self, input_dim):
-        super(Attention, self).__init__()
-        self.scale = 1.0 / (input_dim ** 0.5)
-
-    def forward(self, query, key, value):
-        attn_weights = torch.bmm(query, key.transpose(1, 2)) * self.scale
-        attn_weights = torch.softmax(attn_weights, dim=-1)
-        attn_output = torch.bmm(attn_weights, value)
-        return attn_output
-
-class BatteryMultiBranchNet(nn.Module):
-    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
-        super(BatteryMultiBranchNet, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm1d(cnn_out_channels)
-        self.relu = nn.ReLU()
-        self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
-        self.cnn_dropout = nn.Dropout(p=dropout)
-        
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, 
-                                 batch_first=True, dropout=dropout, bidirectional=True)
-        self.bn_fast = nn.BatchNorm1d(2 * lstm_fast_hidden)
-        self.drop_fast = nn.Dropout(p=dropout)
-
-        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, 
-                                 batch_first=True, dropout=dropout, bidirectional=True)
-        self.bn_slow = nn.BatchNorm1d(2 * lstm_slow_hidden)
-        self.drop_slow = nn.Dropout(p=dropout)
-
-        self.attention_fast = Attention(2 * lstm_fast_hidden)
-        self.attention_slow = Attention(2 * lstm_slow_hidden)
-
-        self.fc_fusion = nn.Linear(2 * (lstm_fast_hidden + lstm_slow_hidden), 32)
-        self.relu_fusion = nn.ReLU()
-        self.fc_out = nn.Linear(32, 1)
+class BatteryTransformerNet(nn.Module):
+    def __init__(self, input_size, transformer_dim=64, num_heads=4, num_layers=2, dropout=0.3):
+        super(BatteryTransformerNet, self).__init__()
+        self.transformer_fast = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=transformer_dim, nhead=num_heads, dropout=dropout), 
+            num_layers=num_layers
+        )
+        self.transformer_slow = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=transformer_dim, nhead=num_heads, dropout=dropout), 
+            num_layers=num_layers
+        )
+        self.fc_fast = nn.Linear(input_size, transformer_dim)
+        self.fc_slow = nn.Linear(input_size, transformer_dim)
+        self.fc_out = nn.Linear(2 * transformer_dim, 1)
 
     def forward(self, x_fast, x_slow):
-        xf = x_fast.permute(0, 2, 1)
-        out_f = self.bn1(self.conv1(xf))
-        out_f = self.cnn_dropout(self.pool(self.relu(out_f))).permute(0, 2, 1)
+        x_fast = self.fc_fast(x_fast)
+        x_slow = self.fc_slow(x_slow)
         
-        lstm_f_out, _ = self.lstm_fast(out_f)
-        lstm_f_out = self.bn_fast(lstm_f_out.permute(0, 2, 1)).permute(0, 2, 1)
-        attn_f_out = self.attention_fast(lstm_f_out, lstm_f_out, lstm_f_out)
-        feat_fast_t   = self.drop_fast(attn_f_out[:, -1, :])
-        feat_fast_t_1 = self.drop_fast(attn_f_out[:, -2, :]) 
-
-        lstm_s_out, _ = self.lstm_slow(x_slow)
-        lstm_s_out = self.bn_slow(lstm_s_out.permute(0, 2, 1)).permute(0, 2, 1)
-        attn_s_out = self.attention_slow(lstm_s_out, lstm_s_out, lstm_s_out)
-        feat_slow_t   = self.drop_slow(attn_s_out[:, -1, :])
-        feat_slow_t_1 = self.drop_slow(attn_s_out[:, -2, :]) 
-
-        combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
-        pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
+        x_fast = self.transformer_fast(x_fast.permute(1, 0, 2)).permute(1, 0, 2)
+        x_slow = self.transformer_slow(x_slow.permute(1, 0, 2)).permute(1, 0, 2)
         
-        combined_t_1 = torch.cat((feat_fast_t_1, feat_slow_t_1), dim=1)
-        pred_t_1 = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t_1)))
+        feat_fast = x_fast[:, -1, :]
+        feat_slow = x_slow[:, -1, :]
         
-        return pred_t, pred_t_1
+        combined = torch.cat((feat_fast, feat_slow), dim=1)
+        pred = self.fc_out(combined)
+        
+        return pred, pred  # Returning the same prediction for t and t-1
 
 def train_and_evaluate():
     t_start = time.time()
@@ -161,7 +126,7 @@ def train_and_evaluate():
                              batch_size=128, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = BatteryMultiBranchNet(input_size=5).to(device)
+    model = BatteryTransformerNet(input_size=5).to(device)
     
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
@@ -211,7 +176,7 @@ def train_and_evaluate():
         epoch_test_mae /= len(test_loader)
         scheduler.step(epoch_test_mae)
         
-        if (epoch + 1) % 50 == 0 or epoch == 0:
+        if (epoch + 1) % 10 == 0 or epoch == 0:
             print(f"Epoch {epoch+1:03d}/{epoch_num} | Train Loss: {train_loss/len(train_loader):.5f} | Test MAE: {epoch_test_mae:.5f}")
 
     training_time = time.time() - t_start_training
