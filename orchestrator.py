@@ -53,7 +53,7 @@ def run_bash(command):
 def run_kaggle_pipeline():
     """Esegue il push su Kaggle, attende la fine, e scarica i log"""
     print("🚀 Push del codice su Kaggle Cloud...")
-    run_bash("kaggle kernels push -p .")
+    run_bash("kaggle kernels push -p . --accelerator NvidiaTeslaT4")
     
     print("⏳ Attesa del completamento del training (polling ogni 60s)...")
     while True:
