@@ -11,7 +11,10 @@ from openai import OpenAI
 load_dotenv()
 
 # Loads openai client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    project="proj_F4j8NgAkr8blWRXc4hqHDgAZ"
+)
 
 # Kaggle dataset location
 KAGGLE_USER_SLUG = "leonardoluchini/autoresearch-battery-soc" 
@@ -123,7 +126,7 @@ def main_loop():
         print(f"\n{'='*40}\nITERATION {iteration}\n{'='*40}")
         current_train_py = read_file("train.py")
         
-        llm_model = "gpt-4o"
+        llm_model = "gpt-5.1-codex-mini"
 
         # 1. Ask the LLM to think and write the new code
         print(llm_model + " is thinking")
@@ -131,12 +134,22 @@ def main_loop():
         conversation_history.append({"role": "user", "content": prompt})
         
         # API Call to the LLM
-        response = client.chat.completions.create(
-            model=llm_model, 
-            messages=conversation_history,
-            temperature=0.7
-        )
-        ai_message = response.choices[0].message.content
+        try:
+            response = client.chat.completions.create(
+                model=llm_model,
+                messages=[
+                    {"role": "user", "content": conversation_history}
+                ]
+            )
+            ai_message = response.choices[0].message.content
+
+        except Exception as e:
+            response = client.responses.create(
+                model=llm_model,
+                input=conversation_history
+            )
+            ai_message = response.output_text
+
         print(extract_llm_text(ai_message))
         conversation_history.append({"role": "assistant", "content": ai_message})
         

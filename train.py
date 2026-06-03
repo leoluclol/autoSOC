@@ -8,8 +8,12 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler
 
+# Ensures Kaggle can read .xlsx files without crashing
 os.system('pip install openpyxl -q')
 
+# ==========================================
+# 1. DATA PREPARATION
+# ==========================================
 def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_length=150, slow_step=5):
     xs_fast, xs_slow, ys = [], [], []
     max_lookback = slow_seq_length * slow_step 
@@ -26,49 +30,39 @@ def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_len
 def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx'):
     print(f"Loading data from {filename}...")
     df = pd.read_excel(filename, sheet_name='Temp_25C')
-    df = df.drop_duplicates(subset=['Time (s)'], keep='first').reset_index(drop=True)
+    df = df.drop_duplicates(subset=['Time (s)'], keep='first') 
     
     df['dt'] = df['Time (s)'].diff().fillna(0)
+    
     if 'Temperature (C)' in df.columns and 'T' not in df.columns:
         df = df.rename(columns={'Temperature (C)': 'T'})
     
     df['Ah_step'] = (df['Current (A)'] * df['dt']) / 3600.0
     df['Ah_roll600'] = df['Ah_step'].rolling(window=600, min_periods=1).sum()
     df['dV_dt'] = df['Voltage (V)'].diff().fillna(0)
-    df['current_direction'] = np.sign(df['Current (A)']).fillna(0)
-    df['current_dir_ema'] = df['current_direction'].ewm(span=30, adjust=False).mean().fillna(0)
     
-    features_cols = [
-        'Voltage (V)', 'Current (A)', 'Ah_roll600', 'dV_dt', 'T',
-        'current_direction', 'current_dir_ema'
-    ]
+    features_cols = ['Voltage (V)', 'Current (A)', 'Ah_roll600', 'dV_dt', 'T']
     target_col = 'SOC'
     
-    df = df.dropna(subset=features_cols + [target_col]).reset_index(drop=True)
-    
-    split_idx = int(len(df) * 0.8)
-    train_df = df.iloc[:split_idx].copy()
-    test_df = df.iloc[split_idx:].copy()
+    df = df.dropna(subset=features_cols + [target_col])
     
     scaler = MinMaxScaler()
-    X_train_raw = train_df[features_cols].values
-    X_test_raw = test_df[features_cols].values
+    X_data = df[features_cols].values
+    X_scaled = scaler.fit_transform(X_data)
+    y_values = df[target_col].values
     
-    X_train_scaled = scaler.fit_transform(X_train_raw)
-    X_test_scaled = scaler.transform(X_test_raw)
+    Xt_f, Xt_s, Yt = create_multibranch_sequences(X_scaled, y_values, fast_seq_length=100, slow_seq_length=150, slow_step=5)
     
-    y_train_val = train_df[target_col].values
-    y_test_val = test_df[target_col].values
+    split_idx = int(len(Xt_f) * 0.8)
     
-    X_tr_f, X_tr_s, y_tr = create_multibranch_sequences(
-        X_train_scaled, y_train_val, fast_seq_length=100, slow_seq_length=150, slow_step=5
-    )
-    X_te_f, X_te_s, y_te = create_multibranch_sequences(
-        X_test_scaled, y_test_val, fast_seq_length=100, slow_seq_length=150, slow_step=5
-    )
+    X_tr_f, X_tr_s, y_tr = Xt_f[:split_idx], Xt_s[:split_idx], Yt[:split_idx]
+    X_te_f, X_te_s, y_te = Xt_f[split_idx:], Xt_s[split_idx:], Yt[split_idx:]
     
     return X_tr_f, X_tr_s, y_tr, X_te_f, X_te_s, y_te, scaler
 
+# ==========================================
+# 2. MODEL AND LOSS DEFINITION
+# ==========================================
 class PhysicsInformedBMSLoss(nn.Module):
     def __init__(self, lambda_penalty=0.0, current_zero_val=0.0, current_threshold=0.05):
         super(PhysicsInformedBMSLoss, self).__init__()
@@ -85,59 +79,47 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=150):
-        super(PositionalEncoding, self).__init__()
-        self.pe = nn.Parameter(torch.zeros(1, max_len, d_model))
+class BatteryMultiBranchNet(nn.Module):
+    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
+        super(BatteryMultiBranchNet, self).__init__()
+        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)      
+        self.relu = nn.ReLU()
+        self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
+        self.cnn_dropout = nn.Dropout(p=dropout)
         
-    def forward(self, x):
-        return x + self.pe[:, :x.size(1), :]
+        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.drop_fast = nn.Dropout(p=dropout)
 
-class BatteryTransformerNet(nn.Module):
-    def __init__(self, input_size, transformer_dim=64, num_heads=8, num_layers=3, dropout=0.5):
-        super(BatteryTransformerNet, self).__init__()
-        
-        self.fc_fast = nn.Linear(input_size, transformer_dim)
-        self.fc_slow = nn.Linear(input_size, transformer_dim)
-        
-        self.pos_fast = PositionalEncoding(transformer_dim, max_len=100)
-        self.pos_slow = PositionalEncoding(transformer_dim, max_len=150)
-        
-        encoder_layer_fast = nn.TransformerEncoderLayer(d_model=transformer_dim, nhead=num_heads, dropout=dropout, batch_first=True)
-        self.transformer_fast = nn.TransformerEncoder(encoder_layer_fast, num_layers=num_layers)
-        
-        encoder_layer_slow = nn.TransformerEncoderLayer(d_model=transformer_dim, nhead=num_heads, dropout=dropout, batch_first=True)
-        self.transformer_slow = nn.TransformerEncoder(encoder_layer_slow, num_layers=num_layers)
-        
-        self.fc_fusion = nn.Linear(2 * transformer_dim, 32)
-        self.bn_fusion = nn.BatchNorm1d(32)
+        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
+        self.drop_slow = nn.Dropout(p=dropout)
+
+        self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
         self.relu_fusion = nn.ReLU()
         self.fc_out = nn.Linear(32, 1)
 
     def forward(self, x_fast, x_slow):
-        x_f = self.fc_fast(x_fast)
-        x_s = self.fc_slow(x_slow)
+        xf = x_fast.permute(0, 2, 1)  
+        out_f = self.cnn_dropout(self.pool(self.relu(self.conv1(xf)))).permute(0, 2, 1)  
         
-        x_f = self.pos_fast(x_f)
-        x_s = self.pos_slow(x_s)
-        
-        out_f = self.transformer_fast(x_f)
-        out_s = self.transformer_slow(x_s)
-        
-        feat_fast_t = out_f[:, -1, :]
-        feat_slow_t = out_s[:, -1, :]
+        lstm_f_out, _ = self.lstm_fast(out_f)
+        feat_fast_t   = self.drop_fast(lstm_f_out[:, -1, :])
+        feat_fast_t_1 = self.drop_fast(lstm_f_out[:, -2, :]) 
+
+        lstm_s_out, _ = self.lstm_slow(x_slow)
+        feat_slow_t   = self.drop_slow(lstm_s_out[:, -1, :])
+        feat_slow_t_1 = self.drop_slow(lstm_s_out[:, -2, :]) 
+
         combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
-        combined_t = self.bn_fusion(combined_t)
         pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
         
-        feat_fast_t_1 = out_f[:, -2, :]
-        feat_slow_t_1 = out_s[:, -2, :]
         combined_t_1 = torch.cat((feat_fast_t_1, feat_slow_t_1), dim=1)
-        combined_t_1 = self.bn_fusion(combined_t_1)
         pred_t_1 = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t_1)))
         
         return pred_t, pred_t_1
 
+# ==========================================
+# 3. TRAINING LOOP WITH METRICS
+# ==========================================
 def train_and_evaluate():
     t_start = time.time()
     
@@ -154,14 +136,14 @@ def train_and_evaluate():
                              batch_size=128, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = BatteryTransformerNet(input_size=7).to(device)
+    model = BatteryMultiBranchNet(input_size=5).to(device)
     
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
-    optimizer = optim.Adam(model.parameters(), lr=0.0003, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=3)
+    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=5)
 
-    dummy_array = np.zeros((1, 7))
+    dummy_array = np.zeros((1, 5))
     scaled_zero_amp = scaler.transform(dummy_array)[0, 1]
     dummy_array[0, 1] = 0.5 
     scaled_half_amp = abs(scaler.transform(dummy_array)[0, 1] - scaled_zero_amp)
@@ -204,11 +186,14 @@ def train_and_evaluate():
         epoch_test_mae /= len(test_loader)
         scheduler.step(epoch_test_mae)
         
-        if (epoch + 1) % 10 == 0 or epoch == 0:
+        if (epoch + 1) % 50 == 0 or epoch == 0:
             print(f"Epoch {epoch+1:03d}/{epoch_num} | Train Loss: {train_loss/len(train_loader):.5f} | Test MAE: {epoch_test_mae:.5f}")
 
     training_time = time.time() - t_start_training
 
+    # ==========================================
+    # 4. FINAL EVALUATION AND METRICS
+    # ==========================================
     model.eval()
     all_y_pred, all_y_true = [], []
     with torch.no_grad():
@@ -235,6 +220,7 @@ def train_and_evaluate():
     print("\n" + "="*40)
     print("FINAL EVALUATION METRICS")
     print("="*40)
+    # Removed the % symbol and MB/s strings to ease LLM parsing
     print(f"test_mae_percent:   {mae * 100:.4f}")
     print(f"test_rmse_percent:  {rmse * 100:.4f}")
     print(f"max_error_percent:  {max_err * 100:.4f}")
