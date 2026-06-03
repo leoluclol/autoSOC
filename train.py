@@ -86,17 +86,20 @@ class Attention(nn.Module):
 class BatteryMultiBranchNet(nn.Module):
     def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)      
+        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm1d(cnn_out_channels)
         self.relu = nn.ReLU()
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
         self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, 
                                  batch_first=True, dropout=dropout, bidirectional=True)
+        self.bn_fast = nn.BatchNorm1d(2 * lstm_fast_hidden)
         self.drop_fast = nn.Dropout(p=dropout)
 
         self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, 
                                  batch_first=True, dropout=dropout, bidirectional=True)
+        self.bn_slow = nn.BatchNorm1d(2 * lstm_slow_hidden)
         self.drop_slow = nn.Dropout(p=dropout)
 
         self.attention_fast = Attention(2 * lstm_fast_hidden)
@@ -107,15 +110,18 @@ class BatteryMultiBranchNet(nn.Module):
         self.fc_out = nn.Linear(32, 1)
 
     def forward(self, x_fast, x_slow):
-        xf = x_fast.permute(0, 2, 1)  
-        out_f = self.cnn_dropout(self.pool(self.relu(self.conv1(xf)))).permute(0, 2, 1)  
+        xf = x_fast.permute(0, 2, 1)
+        out_f = self.bn1(self.conv1(xf))
+        out_f = self.cnn_dropout(self.pool(self.relu(out_f))).permute(0, 2, 1)
         
         lstm_f_out, _ = self.lstm_fast(out_f)
+        lstm_f_out = self.bn_fast(lstm_f_out.permute(0, 2, 1)).permute(0, 2, 1)
         attn_f_out = self.attention_fast(lstm_f_out, lstm_f_out, lstm_f_out)
         feat_fast_t   = self.drop_fast(attn_f_out[:, -1, :])
         feat_fast_t_1 = self.drop_fast(attn_f_out[:, -2, :]) 
 
         lstm_s_out, _ = self.lstm_slow(x_slow)
+        lstm_s_out = self.bn_slow(lstm_s_out.permute(0, 2, 1)).permute(0, 2, 1)
         attn_s_out = self.attention_slow(lstm_s_out, lstm_s_out, lstm_s_out)
         feat_slow_t   = self.drop_slow(attn_s_out[:, -1, :])
         feat_slow_t_1 = self.drop_slow(attn_s_out[:, -2, :]) 
