@@ -135,6 +135,13 @@ def main_loop():
         
         # API Call to the LLM
         try:
+            response = client.responses.create(
+                model=llm_model,
+                input=conversation_history
+            )
+            ai_message = response.output_text
+
+        except Exception as e:
             response = client.chat.completions.create(
                 model=llm_model,
                 messages=[
@@ -142,13 +149,6 @@ def main_loop():
                 ]
             )
             ai_message = response.choices[0].message.content
-
-        except Exception as e:
-            response = client.responses.create(
-                model=llm_model,
-                input=conversation_history
-            )
-            ai_message = response.output_text
 
         with open("llm_chat_log.txt", "a") as file:
             file.write(extract_llm_text(ai_message))
