@@ -43,7 +43,25 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
     df['Current_dir'] = np.sign(df['Current (A)']).fillna(0)
     df['Current_roll120'] = df['Current (A)'].rolling(window=120, min_periods=1).sum()
     
-    features_cols = ['Voltage (V)', 'Current (A)', 'Ah_roll600', 'dV_dt', 'T', 'Current_dir', 'Current_roll120']
+    dir_vals = df['Current_dir'].to_numpy()
+    time_since = np.zeros(len(dir_vals), dtype=int)
+    last_nonzero = dir_vals[0] if dir_vals[0] != 0 else 0
+    counter = 0
+    time_since[0] = 0
+    for i in range(1, len(dir_vals)):
+        curr = dir_vals[i]
+        if curr != 0:
+            if last_nonzero == 0 or curr == last_nonzero:
+                counter += 1
+            else:
+                counter = 0
+            last_nonzero = curr
+        else:
+            counter += 1
+        time_since[i] = counter
+    df['time_since_dir_change'] = time_since
+    
+    features_cols = ['Voltage (V)', 'Current (A)', 'Ah_roll600', 'dV_dt', 'T', 'Current_dir', 'Current_roll120', 'time_since_dir_change']
     target_col = 'SOC'
     
     df = df.dropna(subset=features_cols + [target_col])
@@ -180,14 +198,14 @@ def train_and_evaluate():
                              batch_size=128, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = BatteryAttentionFusionNet(input_size=7).to(device)
+    model = BatteryAttentionFusionNet(input_size=8).to(device)
     
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
     optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=5)
 
-    dummy_array = np.zeros((1, 7))
+    dummy_array = np.zeros((1, 8))
     scaled_zero_amp = scaler.transform(dummy_array)[0, 1]
     dummy_array[0, 1] = 0.5 
     scaled_half_amp = abs(scaler.transform(dummy_array)[0, 1] - scaled_zero_amp)
