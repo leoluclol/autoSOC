@@ -1,27 +1,31 @@
-[{"stream_name":"stdout","time":14.293088404,"data":"Loading data from /kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx...\n"}
-,{"stream_name":"stdout","time":22.604401514,"data":"\n"}
-,{"stream_name":"stdout","time":22.604436394,"data":"Starting Training on cuda - Model Parameters: 0.08M\n"}
-,{"stream_name":"stdout","time":26.832433661,"data":"Epoch 001/50 | Train Loss: 0.20104 | Test MAE: 0.33648\n"}
-,{"stream_name":"stdout","time":159.67566833,"data":"Epoch 050/50 | Train Loss: 0.01766 | Test MAE: 0.28719\n"}
-,{"stream_name":"stdout","time":159.897609042,"data":"\n"}
-,{"stream_name":"stdout","time":159.897641487,"data":"========================================\n"}
-,{"stream_name":"stdout","time":159.897647585,"data":"FINAL EVALUATION METRICS\n"}
-,{"stream_name":"stdout","time":159.89765275,"data":"========================================\n"}
-,{"stream_name":"stdout","time":159.897657838,"data":"test_mae_percent:   28.6628\n"}
-,{"stream_name":"stdout","time":159.897662943,"data":"test_rmse_percent:  30.0418\n"}
-,{"stream_name":"stdout","time":159.897668266,"data":"max_error_percent:  56.8032\n"}
-,{"stream_name":"stdout","time":159.897673303,"data":"----------------------------------------\n"}
-,{"stream_name":"stdout","time":159.897678367,"data":"training_seconds:   137.1\n"}
-,{"stream_name":"stdout","time":159.897683235,"data":"total_seconds:      145.6\n"}
-,{"stream_name":"stdout","time":159.897688679,"data":"peak_vram_mb:       167.3\n"}
-,{"stream_name":"stdout","time":159.897693561,"data":"num_steps:          11100\n"}
-,{"stream_name":"stdout","time":159.897698853,"data":"total_samples:      35502\n"}
-,{"stream_name":"stdout","time":159.897703822,"data":"num_params_M:       0.0752\n"}
-,{"stream_name":"stdout","time":159.897709094,"data":"========================================\n"}
-,{"stream_name":"stderr","time":164.635983111,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
-,{"stream_name":"stderr","time":164.636062935,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
-,{"stream_name":"stderr","time":164.895799983,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
-,{"stream_name":"stderr","time":164.895836246,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
-,{"stream_name":"stderr","time":165.523844248,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
-,{"stream_name":"stderr","time":166.78431712,"data":"[NbConvertApp] Writing 334776 bytes to __results__.html\n"}
+[{"stream_name":"stdout","time":22.470151366,"data":"Loading data from /kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx...\n"}
+,{"stream_name":"stdout","time":32.695747771,"data":"\n"}
+,{"stream_name":"stdout","time":32.695783919,"data":"Starting Training on cuda - Model Parameters: 0.0345M\n"}
+,{"stream_name":"stdout","time":37.788725631,"data":"Epoch 001/50 | Train Loss: 0.26702 | Test MAE: 0.59455\n"}
+,{"stream_name":"stdout","time":62.954489434,"data":"Epoch 010/50 | Train Loss: 0.11458 | Test MAE: 0.53494\n"}
+,{"stream_name":"stdout","time":90.706753613,"data":"Epoch 020/50 | Train Loss: 0.05944 | Test MAE: 0.32411\n"}
+,{"stream_name":"stdout","time":118.027599577,"data":"Epoch 030/50 | Train Loss: 0.04503 | Test MAE: 0.41892\n"}
+,{"stream_name":"stdout","time":145.388776432,"data":"Epoch 040/50 | Train Loss: 0.03489 | Test MAE: 0.37401\n"}
+,{"stream_name":"stdout","time":172.493818249,"data":"Epoch 050/50 | Train Loss: 0.02941 | Test MAE: 0.38416\n"}
+,{"stream_name":"stdout","time":172.779689165,"data":"\n"}
+,{"stream_name":"stdout","time":172.779727685,"data":"========================================\n"}
+,{"stream_name":"stdout","time":172.779732261,"data":"FINAL EVALUATION METRICS\n"}
+,{"stream_name":"stdout","time":172.779735794,"data":"========================================\n"}
+,{"stream_name":"stdout","time":172.779739165,"data":"test_mae_percent:   6.8812\n"}
+,{"stream_name":"stdout","time":172.779742496,"data":"test_rmse_percent:  8.1265\n"}
+,{"stream_name":"stdout","time":172.779745829,"data":"max_error_percent:  18.3747\n"}
+,{"stream_name":"stdout","time":172.779749082,"data":"----------------------------------------\n"}
+,{"stream_name":"stdout","time":172.779752257,"data":"training_seconds:   139.8\n"}
+,{"stream_name":"stdout","time":172.779755444,"data":"total_seconds:      150.3\n"}
+,{"stream_name":"stdout","time":172.779758845,"data":"peak_vram_mb:       130.1\n"}
+,{"stream_name":"stdout","time":172.779761987,"data":"num_steps:          14800\n"}
+,{"stream_name":"stdout","time":172.779765074,"data":"total_samples:      35502\n"}
+,{"stream_name":"stdout","time":172.779768132,"data":"num_params_M:       0.0345\n"}
+,{"stream_name":"stdout","time":172.779771273,"data":"========================================\n"}
+,{"stream_name":"stderr","time":180.315987371,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":180.31604211,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":180.727416888,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":180.727448562,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":181.519912597,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":183.16977924,"data":"[NbConvertApp] Writing 349690 bytes to __results__.html\n"}
 ]
