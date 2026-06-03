@@ -269,17 +269,13 @@ def calibrate_predictions_on_validation(y_pred_raw, y_true):
     raw = np.clip(y_pred_raw, lo, hi)
     candidates.append(raw)
 
-    # Bias-only robust calibration: corrects global SOC offset while preserving dynamics.
     bias = np.median(y_true - y_pred_raw)
     candidates.append(np.clip(y_pred_raw + bias, lo, hi))
 
-    # Affine calibration: corrects learned scale/offset error from the final regression head.
     if np.std(y_pred_raw) > 1e-9:
         a, b = np.polyfit(y_pred_raw, y_true, deg=1)
         candidates.append(np.clip(a * y_pred_raw + b, lo, hi))
 
-    # Added calibration candidates. These are selected only if they reduce validation MAE,
-    # so this is a safe post-hoc improvement over the kept affine/bias calibration.
     unique_count = len(np.unique(y_pred_raw))
     if unique_count >= 5 and np.std(y_pred_raw) > 1e-9:
         for deg in (2, 3):

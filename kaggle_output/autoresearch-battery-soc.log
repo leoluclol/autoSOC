@@ -1,31 +1,31 @@
-[{"stream_name":"stdout","time":15.34432824,"data":"Loading data from /kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx...\n"}
-,{"stream_name":"stdout","time":24.128531789,"data":"\n"}
-,{"stream_name":"stdout","time":24.128574685,"data":"Starting Training on cuda - Model Parameters: 0.0345M\n"}
-,{"stream_name":"stdout","time":28.537151294,"data":"Epoch 001/50 | Train Loss: 0.28178 | Test MAE: 0.63611\n"}
-,{"stream_name":"stdout","time":54.912048498,"data":"Epoch 010/50 | Train Loss: 0.08964 | Test MAE: 0.54329\n"}
-,{"stream_name":"stdout","time":84.331230385,"data":"Epoch 020/50 | Train Loss: 0.04868 | Test MAE: 0.44939\n"}
-,{"stream_name":"stdout","time":113.277900691,"data":"Epoch 030/50 | Train Loss: 0.03533 | Test MAE: 0.45878\n"}
-,{"stream_name":"stdout","time":142.419258203,"data":"Epoch 040/50 | Train Loss: 0.02782 | Test MAE: 0.40478\n"}
-,{"stream_name":"stdout","time":171.603149059,"data":"Epoch 050/50 | Train Loss: 0.02169 | Test MAE: 0.46379\n"}
-,{"stream_name":"stdout","time":171.992595191,"data":"\n"}
-,{"stream_name":"stdout","time":171.992625644,"data":"========================================\n"}
-,{"stream_name":"stdout","time":171.99263123,"data":"FINAL EVALUATION METRICS\n"}
-,{"stream_name":"stdout","time":171.99263609,"data":"========================================\n"}
-,{"stream_name":"stdout","time":171.992640965,"data":"test_mae_percent:   0.0775\n"}
-,{"stream_name":"stdout","time":171.992645753,"data":"test_rmse_percent:  0.1184\n"}
-,{"stream_name":"stdout","time":171.992650768,"data":"max_error_percent:  0.5670\n"}
-,{"stream_name":"stdout","time":171.992655503,"data":"----------------------------------------\n"}
-,{"stream_name":"stdout","time":171.992660271,"data":"training_seconds:   147.5\n"}
-,{"stream_name":"stdout","time":171.99267471,"data":"total_seconds:      156.6\n"}
-,{"stream_name":"stdout","time":171.992679488,"data":"peak_vram_mb:       130.1\n"}
-,{"stream_name":"stdout","time":171.992684162,"data":"num_steps:          14800\n"}
-,{"stream_name":"stdout","time":171.992688833,"data":"total_samples:      35502\n"}
-,{"stream_name":"stdout","time":171.992693615,"data":"num_params_M:       0.0345\n"}
-,{"stream_name":"stdout","time":171.992698333,"data":"========================================\n"}
-,{"stream_name":"stderr","time":176.79332987,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
-,{"stream_name":"stderr","time":176.79340675,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
-,{"stream_name":"stderr","time":177.074207648,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
-,{"stream_name":"stderr","time":177.074252127,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
-,{"stream_name":"stderr","time":177.776429599,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
-,{"stream_name":"stderr","time":179.144562386,"data":"[NbConvertApp] Writing 372837 bytes to __results__.html\n"}
+[{"stream_name":"stdout","time":14.677926516,"data":"Loading data from /kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx...\n"}
+,{"stream_name":"stdout","time":23.72396926,"data":"\n"}
+,{"stream_name":"stdout","time":23.724000961,"data":"Starting Training on cuda - Model Parameters: 0.0345M\n"}
+,{"stream_name":"stdout","time":28.206838406,"data":"Epoch 001/50 | Train Loss: 0.24595 | Test MAE: 0.64459\n"}
+,{"stream_name":"stdout","time":54.541485034,"data":"Epoch 010/50 | Train Loss: 0.07384 | Test MAE: 0.47744\n"}
+,{"stream_name":"stdout","time":83.867052335,"data":"Epoch 020/50 | Train Loss: 0.04405 | Test MAE: 0.46446\n"}
+,{"stream_name":"stdout","time":112.802415991,"data":"Epoch 030/50 | Train Loss: 0.02651 | Test MAE: 0.46967\n"}
+,{"stream_name":"stdout","time":141.497561736,"data":"Epoch 040/50 | Train Loss: 0.02209 | Test MAE: 0.46908\n"}
+,{"stream_name":"stdout","time":170.131306298,"data":"Epoch 050/50 | Train Loss: 0.01895 | Test MAE: 0.47101\n"}
+,{"stream_name":"stdout","time":170.416313106,"data":"\n"}
+,{"stream_name":"stdout","time":170.416353089,"data":"========================================\n"}
+,{"stream_name":"stdout","time":170.416360805,"data":"FINAL EVALUATION METRICS\n"}
+,{"stream_name":"stdout","time":170.416366214,"data":"========================================\n"}
+,{"stream_name":"stdout","time":170.416371376,"data":"test_mae_percent:   4.4615\n"}
+,{"stream_name":"stdout","time":170.416375849,"data":"test_rmse_percent:  6.5895\n"}
+,{"stream_name":"stdout","time":170.416380444,"data":"max_error_percent:  28.5443\n"}
+,{"stream_name":"stdout","time":170.416385274,"data":"----------------------------------------\n"}
+,{"stream_name":"stdout","time":170.416389738,"data":"training_seconds:   146.4\n"}
+,{"stream_name":"stdout","time":170.416394131,"data":"total_seconds:      155.7\n"}
+,{"stream_name":"stdout","time":170.416404171,"data":"peak_vram_mb:       130.1\n"}
+,{"stream_name":"stdout","time":170.416407558,"data":"num_steps:          14800\n"}
+,{"stream_name":"stdout","time":170.416410534,"data":"total_samples:      35502\n"}
+,{"stream_name":"stdout","time":170.416413568,"data":"num_params_M:       0.0345\n"}
+,{"stream_name":"stdout","time":170.416416683,"data":"========================================\n"}
+,{"stream_name":"stderr","time":175.448569548,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":175.448672765,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":175.719933882,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":175.719964554,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":176.39983906,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":177.786611774,"data":"[NbConvertApp] Writing 363265 bytes to __results__.html\n"}
 ]
