@@ -8,12 +8,8 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler
 
-# Ensures Kaggle can read .xlsx files without crashing
 os.system('pip install openpyxl -q')
 
-# ==========================================
-# 1. DATA PREPARATION
-# ==========================================
 def create_multibranch_sequences(data, target, fast_seq_length=100, slow_seq_length=150, slow_step=5):
     xs_fast, xs_slow, ys = [], [], []
     max_lookback = slow_seq_length * slow_step 
@@ -60,9 +56,6 @@ def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calc
     
     return X_tr_f, X_tr_s, y_tr, X_te_f, X_te_s, y_te, scaler
 
-# ==========================================
-# 2. MODEL AND LOSS DEFINITION
-# ==========================================
 class PhysicsInformedBMSLoss(nn.Module):
     def __init__(self, lambda_penalty=0.0, current_zero_val=0.0, current_threshold=0.05):
         super(PhysicsInformedBMSLoss, self).__init__()
@@ -79,6 +72,17 @@ class PhysicsInformedBMSLoss(nn.Module):
         
         return base_loss + (self.lambda_penalty * physics_penalty)
 
+class Attention(nn.Module):
+    def __init__(self, input_dim):
+        super(Attention, self).__init__()
+        self.scale = 1.0 / (input_dim ** 0.5)
+
+    def forward(self, query, key, value):
+        attn_weights = torch.bmm(query, key.transpose(1, 2)) * self.scale
+        attn_weights = torch.softmax(attn_weights, dim=-1)
+        attn_output = torch.bmm(attn_weights, value)
+        return attn_output
+
 class BatteryMultiBranchNet(nn.Module):
     def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
@@ -93,6 +97,9 @@ class BatteryMultiBranchNet(nn.Module):
         self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
         self.drop_slow = nn.Dropout(p=dropout)
 
+        self.attention_fast = Attention(lstm_fast_hidden)
+        self.attention_slow = Attention(lstm_slow_hidden)
+
         self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
         self.relu_fusion = nn.ReLU()
         self.fc_out = nn.Linear(32, 1)
@@ -102,12 +109,14 @@ class BatteryMultiBranchNet(nn.Module):
         out_f = self.cnn_dropout(self.pool(self.relu(self.conv1(xf)))).permute(0, 2, 1)  
         
         lstm_f_out, _ = self.lstm_fast(out_f)
-        feat_fast_t   = self.drop_fast(lstm_f_out[:, -1, :])
-        feat_fast_t_1 = self.drop_fast(lstm_f_out[:, -2, :]) 
+        attn_f_out = self.attention_fast(lstm_f_out, lstm_f_out, lstm_f_out)
+        feat_fast_t   = self.drop_fast(attn_f_out[:, -1, :])
+        feat_fast_t_1 = self.drop_fast(attn_f_out[:, -2, :]) 
 
         lstm_s_out, _ = self.lstm_slow(x_slow)
-        feat_slow_t   = self.drop_slow(lstm_s_out[:, -1, :])
-        feat_slow_t_1 = self.drop_slow(lstm_s_out[:, -2, :]) 
+        attn_s_out = self.attention_slow(lstm_s_out, lstm_s_out, lstm_s_out)
+        feat_slow_t   = self.drop_slow(attn_s_out[:, -1, :])
+        feat_slow_t_1 = self.drop_slow(attn_s_out[:, -2, :]) 
 
         combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
         pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
@@ -117,9 +126,6 @@ class BatteryMultiBranchNet(nn.Module):
         
         return pred_t, pred_t_1
 
-# ==========================================
-# 3. TRAINING LOOP WITH METRICS
-# ==========================================
 def train_and_evaluate():
     t_start = time.time()
     
@@ -191,9 +197,6 @@ def train_and_evaluate():
 
     training_time = time.time() - t_start_training
 
-    # ==========================================
-    # 4. FINAL EVALUATION AND METRICS
-    # ==========================================
     model.eval()
     all_y_pred, all_y_true = [], []
     with torch.no_grad():
@@ -220,7 +223,6 @@ def train_and_evaluate():
     print("\n" + "="*40)
     print("FINAL EVALUATION METRICS")
     print("="*40)
-    # Removed the % symbol and MB/s strings to ease LLM parsing
     print(f"test_mae_percent:   {mae * 100:.4f}")
     print(f"test_rmse_percent:  {rmse * 100:.4f}")
     print(f"max_error_percent:  {max_err * 100:.4f}")
