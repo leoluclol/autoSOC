@@ -98,7 +98,7 @@ class Attention(nn.Module):
         return torch.sum(x * attn_weights, dim=1)
 
 class BatteryMultiBranchNet(nn.Module):
-    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
+    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=128, lstm_slow_hidden=128, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
         self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)      
         self.relu = nn.ReLU()

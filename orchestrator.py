@@ -68,18 +68,18 @@ def run_kaggle_pipeline():
     print("📥 Download dei risultati...")
     run_bash("mkdir -p kaggle_output")
     # Pulisce i log vecchi per evitare di leggere output di run precedenti
-    run_bash("rm -f ./kaggle_output/run.log") 
+    run_bash("rm -f ./kaggle_output/autoresearch-battery-soc.log") 
     
     # Questo comando scarica tutto il contenuto di /kaggle/working/ dentro ./kaggle_output/
     run_bash(f"kaggle kernels output {KAGGLE_USER_SLUG} -p ./kaggle_output")
     
     # Il file prodotto dal nostro script train.py si troverà qui:
-    log_path = "./kaggle_output/run.log"
+    log_path = "./kaggle_output/autoresearch-battery-soc.log"
     
     if os.path.exists(log_path):
         return read_file(log_path)
     
-    return "Errore: run.log non trovato nella cartella scaricata. Kaggle potrebbe essere andato in Timeout o in OOM prima di avviare Python."
+    return "Errore: autoresearch-battery-soc.log non trovato nella cartella scaricata. Kaggle potrebbe essere andato in Timeout o in OOM prima di avviare Python."
 # ==========================================
 # 4. GESTIONE DELLE METRICHE
 # ==========================================
@@ -158,7 +158,7 @@ def main_loop():
         if current_mae == 0.0:
             status = "crash"
             print("❌ Il training su Kaggle è andato in crash.")
-            # run_bash("git reset HEAD~1 --hard") # Rollback immediato
+            run_bash("git reset HEAD~1 --hard") # Rollback immediato
         elif current_mae < best_mae:
             status = "keep"
             print(f"✅ MIGLIORAMENTO! Nuovo MAE: {current_mae} (precedente: {best_mae})")
