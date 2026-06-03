@@ -1,10 +1,9 @@
 """
-Autoresearch pretraining script per LSTM/CNN + Transformer (PINN).
+Autoresearch pretraining script per LSTM Multi-Branch (PINN).
 Script unificato, ottimizzato per l'esecuzione su Kaggle Cloud.
 """
 
 import os
-import sys
 import time
 import numpy as np
 import pandas as pd
@@ -14,27 +13,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler
 
-# ==========================================
-# 0. CONFIGURAZIONE LOGGING
-# ==========================================
-class DualLogger:
-    """Intercetta stdout e stderr per scriverli sia a schermo che su run.log"""
-    def __init__(self, filepath):
-        self.terminal = sys.stdout
-        self.log = open(filepath, "w", encoding="utf-8")
-
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-        self.log.flush() # Assicura che venga scritto su disco immediatamente
-
-    def flush(self):
-        self.terminal.flush()
-        self.log.flush()
-
-sys.stdout = DualLogger("run.log")
-sys.stderr = sys.stdout
-
+# Assicura che Kaggle possa leggere i file .xlsx senza crashare
 os.system('pip install openpyxl -q')
 
 # ==========================================
@@ -106,55 +85,53 @@ class PhysicsInformedBMSLoss(nn.Module):
         return base_loss + (self.lambda_penalty * physics_penalty)
 
 class Attention(nn.Module):
-    def __init__(self, hidden_dim):
+    def __init__(self, input_dim):
         super(Attention, self).__init__()
-        self.attention = nn.Linear(hidden_dim, 1, bias=False)
+        self.attention = nn.Sequential(
+            nn.Linear(input_dim, input_dim),
+            nn.Tanh(),
+            nn.Linear(input_dim, 1)
+        )
 
-    def forward(self, lstm_output):
-        attention_weights = torch.softmax(self.attention(lstm_output), dim=1)
-        context_vector = torch.sum(attention_weights * lstm_output, dim=1)
-        return context_vector
+    def forward(self, x):
+        attn_weights = torch.softmax(self.attention(x), dim=1)
+        return torch.sum(x * attn_weights, dim=1)
 
 class BatteryMultiBranchNet(nn.Module):
-    def __init__(self, input_size, cnn_out_channels=128, lstm_fast_hidden=128, transformer_hidden=256, nhead=4, num_layers=3, dropout=0.3):
+    def __init__(self, input_size, cnn_out_channels=64, lstm_fast_hidden=64, lstm_slow_hidden=64, dropout=0.3):
         super(BatteryMultiBranchNet, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv1d(in_channels=cnn_out_channels, out_channels=cnn_out_channels, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv1d(in_channels=input_size, out_channels=cnn_out_channels, kernel_size=3, padding=1)      
         self.relu = nn.ReLU()
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.cnn_dropout = nn.Dropout(p=dropout)
         
-        # Aggiungo un ulteriore livello LSTM alla branca "fast"
-        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=3, batch_first=True, dropout=dropout)
-        self.attention_fast = Attention(lstm_fast_hidden)
+        self.lstm_fast = nn.LSTM(input_size=cnn_out_channels, hidden_size=lstm_fast_hidden, num_layers=2, batch_first=True, dropout=dropout)
         self.drop_fast = nn.Dropout(p=dropout)
 
-        # Modifico i parametri del livello Transformer
-        self.transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=input_size, nhead=nhead, dim_feedforward=transformer_hidden, dropout=dropout)
-        self.transformer_encoder = nn.TransformerEncoder(self.transformer_encoder_layer, num_layers=num_layers)
-        self.attention_slow = Attention(input_size)
+        self.lstm_slow = nn.LSTM(input_size=input_size, hidden_size=lstm_slow_hidden, num_layers=2, batch_first=True, dropout=dropout)
         self.drop_slow = nn.Dropout(p=dropout)
 
-        self.fc_fusion = nn.Linear(lstm_fast_hidden + input_size, 32)
+        self.attention_fast = Attention(lstm_fast_hidden)
+        self.attention_slow = Attention(lstm_slow_hidden)
+
+        self.fc_fusion = nn.Linear(lstm_fast_hidden + lstm_slow_hidden, 32)
         self.relu_fusion = nn.ReLU()
         self.fc_out = nn.Linear(32, 1)
 
     def forward(self, x_fast, x_slow):
         xf = x_fast.permute(0, 2, 1)  
-        out_f = self.cnn_dropout(self.pool(self.relu(self.conv2(self.relu(self.conv1(xf)))))).permute(0, 2, 1)  
+        out_f = self.cnn_dropout(self.pool(self.relu(self.conv1(xf)))).permute(0, 2, 1)  
         
         lstm_f_out, _ = self.lstm_fast(out_f)
-        feat_fast_t = self.drop_fast(self.attention_fast(lstm_f_out))
-        
-        x_slow = x_slow.permute(1, 0, 2)  # Transformer expects input of shape (seq_len, batch, input_size)
-        transformer_out = self.transformer_encoder(x_slow)
-        transformer_out = transformer_out.permute(1, 0, 2)  # Back to (batch, seq_len, input_size)
-        feat_slow_t = self.drop_slow(self.attention_slow(transformer_out))
+        feat_fast_t = self.attention_fast(lstm_f_out)
+
+        lstm_s_out, _ = self.lstm_slow(x_slow)
+        feat_slow_t = self.attention_slow(lstm_s_out)
 
         combined_t = torch.cat((feat_fast_t, feat_slow_t), dim=1)
         pred_t = self.fc_out(self.relu_fusion(self.fc_fusion(combined_t)))
         
-        return pred_t, pred_t  # Return the same prediction for t and t-1 for simplicity
+        return pred_t, pred_t  # Use the same pred_t for pred_t_1 for simplicity, adjust if needed
 
 # ==========================================
 # 3. LOOP DI ADDESTRAMENTO CON METRICHE
@@ -167,12 +144,12 @@ def train_and_evaluate():
     train_loader = DataLoader(TensorDataset(torch.tensor(X_tr_f, dtype=torch.float32), 
                                             torch.tensor(X_tr_s, dtype=torch.float32), 
                                             torch.tensor(y_tr, dtype=torch.float32).view(-1, 1)), 
-                              batch_size=64, shuffle=True)  # Reduced batch size to 64
+                              batch_size=128, shuffle=True)
                               
     test_loader = DataLoader(TensorDataset(torch.tensor(X_te_f, dtype=torch.float32), 
                                            torch.tensor(X_te_s, dtype=torch.float32), 
                                            torch.tensor(y_te, dtype=torch.float32).view(-1, 1)), 
-                             batch_size=64, shuffle=False)  # Reduced batch size to 64
+                             batch_size=128, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = BatteryMultiBranchNet(input_size=5).to(device)
@@ -259,6 +236,7 @@ def train_and_evaluate():
     print("\n" + "="*40)
     print("FINAL EVALUATION METRICS")
     print("="*40)
+    # Rimosso il simbolo % e le stringhe MB/s per facilitare il parsing dell'LLM
     print(f"test_mae_percent:   {mae * 100:.4f}")
     print(f"test_rmse_percent:  {rmse * 100:.4f}")
     print(f"max_error_percent:  {max_err * 100:.4f}")

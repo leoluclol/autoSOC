@@ -1,6 +1,6 @@
 """
 Autoresearch pretraining script per LSTM Multi-Branch (PINN).
-Script unificato, ottimizzato per l'esecuzione su Kaggle Cloud.
+Script unificato, attimizzato per l'esecuzione su Kaggle Cloud.
 """
 
 import os
