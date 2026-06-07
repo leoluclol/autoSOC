@@ -1,459 +1,383 @@
-import os
-import time
-import numpy as np
 import pandas as pd
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+import os
+import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
+from torch.utils.data import DataLoader, TensorDataset
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-# Ensures Kaggle can read .xlsx files without crashing
-os.system('pip install openpyxl -q')
+# ==============================================================================
+# 1. GLOBAL HYPERPARAMETERS & CONFIGURATION
+# ==============================================================================
 
-FEATURE_COLUMNS = [
-    'Voltage (V)',
-    'Current (A)',
-    'Ah_roll600',
-    'dV_dt',
-    'T',
-    'Current_dir',
-    'Current_roll120',
-    'time_since_dir_change'
-]
+# --- Data Parameters ---
+TRAIN_RATIO = 0.8
+NUM_WINDOWS = 3                # Number of distinct test chunks to carve out
+SEQ_LENGTH = 300               # Number of historical timesteps per sequence
+BATCH_SIZE = 128               # Batch size for DataLoaders
 
-# ==========================================
-# 1. DATA PREPARATION
-# ==========================================
-def create_multibranch_sequences(data, target, weights=None, fast_seq_length=100, slow_seq_length=150, slow_step=5):
-    xs_fast, xs_slow, ys, ws = [], [], [], []
-    max_lookback = slow_seq_length * slow_step
 
-    for i in range(max_lookback - 1, len(data)):
-        x_f = data[i - fast_seq_length + 1 : i + 1]
-        x_s = data[i - max_lookback + 1 : i + 1 : slow_step]
-        xs_fast.append(x_f)
-        xs_slow.append(x_s)
+# --- Model Architecture ---
+LSTM_HIDDEN = 64               # Hidden dimensions for the LSTM
+NUM_HEADS = 4                  # Self-Attention heads (LSTM_HIDDEN must be divisible by this)
+DROPOUT = 0.3                  # Dropout probability for regularization
+MLP_HIDDEN = 32                # Hidden dimension for the dense layer post-attention
+
+# --- Training Parameters ---
+EPOCHS = 150                   # Total training epochs
+LEARNING_RATE = 0.005          # Initial learning rate for Adam
+WEIGHT_DECAY = 1e-5            # L2 regularization factor
+SCHEDULER_PATIENCE = 5         # Epochs to wait before reducing LR on plateau
+SCHEDULER_FACTOR = 0.75        # Factor to multiply LR by on plateau
+
+# --- PINN (Physics-Informed) Configuration ---
+LAMBDA_PENALTY = 0.3           # Weight of the physics penalty against the base MAE loss
+CURRENT_IDLE_THRESHOLD_AMP = 0.5 # Amps threshold below which battery is considered "idle"
+
+# --- Feature Configuration ---
+COLUMNS = ['Test_Time(s)', 'Voltage(V)', 'Current(A)', 'dV/dt(V/s)', 'Temperature (C)_1', 'SoC (%)']
+FEATURES = ['Voltage(V)', 'Current(A)', 'dV/dt(V/s)', 'Temperature (C)_1']
+TARGET = 'SoC (%)'
+CURRENT_IDX = FEATURES.index('Current(A)') # Automatically find the index for Current(A)
+
+
+# ========= DO NOT MODIFY
+FILE_PATH = '/kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/CALCE-dataset-1Hz.xlsx'
+SHEETS = ["DST-US06-FUDS-25"]
+OCV_KEEP_FRACTION = 0.5        # Downsampling factor for pure OCV profiles
+
+
+# ==============================================================================
+# 2. DATA PROCESSING & SEQUENCE GENERATION
+# ==============================================================================
+
+def create_sequences(data, target, seq_length=300):
+    xs, ys = [], []
+    for i in range(seq_length - 1, len(data)): 
+        xs.append(data[i - seq_length + 1 : i + 1])
         ys.append(target[i])
-        if weights is not None:
-            ws.append(weights[i])
+    return np.array(xs), np.array(ys)
 
-    outputs = (np.array(xs_fast), np.array(xs_slow), np.array(ys))
-    if weights is not None:
-        outputs += (np.array(ws),)
-    return outputs
+def process_and_split_data(filename, sheets, train_ratio, seq_length, num_windows):
+    X_tr_list, y_tr_list, X_te_list, y_te_list = [], [], [], []
+    train_raw_features, sheet_data_dict = [], {}
 
-def process_and_split_data(filename='/kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/dataset_filled_1Hz_LFP.xlsx'):
-    print(f"Loading data from {filename}...")
-    df = pd.read_excel(filename, sheet_name='Temp_25C')
-    df = df.drop_duplicates(subset=['Time (s)'], keep='first')
-
-    df['dt'] = df['Time (s)'].diff().fillna(0)
-
-    if 'Temperature (C)' in df.columns and 'T' not in df.columns:
-        df = df.rename(columns={'Temperature (C)': 'T'})
-
-    df['Ah_step'] = (df['Current (A)'] * df['dt']) / 3600.0
-    df['Ah_roll600'] = df['Ah_step'].rolling(window=600, min_periods=1).sum()
-    df['dV_dt'] = df['Voltage (V)'].diff().fillna(0)
-    df['Current_dir'] = np.sign(df['Current (A)']).fillna(0)
-    df['Current_roll120'] = df['Current (A)'].rolling(window=120, min_periods=1).sum()
-
-    dir_vals = df['Current_dir'].to_numpy()
-    time_since = np.zeros(len(dir_vals), dtype=int)
-    last_sign = dir_vals[0] if dir_vals[0] != 0 else 0
-    counter = 0
-    time_since[0] = 0
-    for i in range(1, len(dir_vals)):
-        curr = dir_vals[i]
-        if curr != 0:
-            if last_sign == 0 or curr == last_sign:
-                counter += 1
-            else:
-                counter = 0
-            last_sign = curr
-        else:
-            counter += 1
-        time_since[i] = counter
-    df['time_since_dir_change'] = time_since
-
-    plateau_weight = 1.0 / (np.abs(df['dV_dt']) + 1e-3)
-    plateau_weight /= plateau_weight.mean()
-
-    target_col = 'SOC'
-    df = df.dropna(subset=FEATURE_COLUMNS + [target_col])
+    # --- PASS 1: Calculate Windows & Fit Scaler ---
+    for sheet in sheets:
+        df = pd.read_excel(filename, sheet_name=sheet, usecols=COLUMNS)
+        X_raw = df[FEATURES].values
+        y_raw = df[TARGET].values
+        total_len = len(X_raw)
+        
+        test_len = int(total_len * (1 - train_ratio))
+        window_size = test_len // num_windows
+        interval = total_len // num_windows
+        
+        test_windows = []
+        for i in range(num_windows):
+            w_start = i * interval + (interval - window_size) // 2
+            w_end = w_start + window_size
+            test_windows.append((w_start, w_end))
+            
+        train_mask = np.ones(total_len, dtype=bool) 
+        for start, end in test_windows:
+            train_mask[start:end] = False
+            
+        train_raw_features.append(X_raw[train_mask])
+        
+        sheet_data_dict[sheet] = {
+            'X_raw': X_raw, 'y_raw': y_raw, 
+            'test_windows': test_windows, 'total_len': total_len
+        }
 
     scaler = MinMaxScaler()
-    X_scaled = scaler.fit_transform(df[FEATURE_COLUMNS].values)
-    Y_values = df[target_col].values
-    weight_values = plateau_weight[df.index].to_numpy()
+    scaler.fit(np.vstack(train_raw_features))
 
-    Xt_f, Xt_s, Yt, Wt = create_multibranch_sequences(
-        X_scaled, Y_values, weights=weight_values,
-        fast_seq_length=100, slow_seq_length=150, slow_step=5
-    )
+    # --- PASS 2: Scale & Chunk Generation ---
+    for sheet in sheets:
+        data = sheet_data_dict[sheet]
+        X_scaled = scaler.transform(data['X_raw'])
+        step_size = int(1 / OCV_KEEP_FRACTION) if "OCV" in sheet else 1
+        
+        # Test Sequences (With lookback)
+        for start, end in data['test_windows']:
+            test_start_idx = max(0, start - seq_length + 1)
+            X_test_chunk = X_scaled[test_start_idx:end]
+            y_test_chunk = data['y_raw'][test_start_idx:end]
+            
+            if len(X_test_chunk) >= seq_length:
+                xt, yt = create_sequences(X_test_chunk, y_test_chunk, seq_length)
+                X_te_list.append(xt[::step_size])
+                y_te_list.append(yt[::step_size])
+                
+        # Train Sequences (Between test chunks)
+        train_chunks = []
+        last_end = 0
+        for start, end in data['test_windows']:
+            if start > last_end:
+                train_chunks.append((last_end, start))
+            last_end = end
+        if last_end < data['total_len']:
+            train_chunks.append((last_end, data['total_len']))
+            
+        for t_start, t_end in train_chunks:
+            X_train_chunk = X_scaled[t_start:t_end]
+            y_train_chunk = data['y_raw'][t_start:t_end]
+            
+            if len(X_train_chunk) >= seq_length:
+                xt, yt = create_sequences(X_train_chunk, y_train_chunk, seq_length)
+                X_tr_list.append(xt[::step_size])
+                y_tr_list.append(yt[::step_size])
 
-    split_idx = int(len(Xt_f) * 0.8)
-    X_tr_f, X_tr_s, y_tr = Xt_f[:split_idx], Xt_s[:split_idx], Yt[:split_idx]
-    X_te_f, X_te_s, y_te = Xt_f[split_idx:], Xt_s[split_idx:], Yt[split_idx:]
-    w_tr, w_te = Wt[:split_idx], Wt[split_idx:]
+    X_tr = np.concatenate(X_tr_list, axis=0) if X_tr_list else None
+    y_tr = np.concatenate(y_tr_list, axis=0) if y_tr_list else None
+    X_te = np.concatenate(X_te_list, axis=0) if X_te_list else None
+    y_te = np.concatenate(y_te_list, axis=0) if y_te_list else None
+    
+    return X_tr, y_tr, X_te, y_te, scaler, sheet_data_dict
 
-    return X_tr_f, X_tr_s, y_tr, w_tr, X_te_f, X_te_s, y_te, w_te, scaler
 
-# ==========================================
-# 2. MODEL AND LOSS DEFINITION
-# ==========================================
+# ==============================================================================
+# 3. MODEL ARCHITECTURE & PINN LOSS
+# ==============================================================================
+
 class PhysicsInformedBMSLoss(nn.Module):
-    def __init__(self, lambda_penalty=0.0, current_zero_val=0.0, current_threshold=0.05):
+    def __init__(self, lambda_penalty, current_zero_val, current_threshold):
         super(PhysicsInformedBMSLoss, self).__init__()
+        self.mae = nn.L1Loss()
         self.lambda_penalty = lambda_penalty
         self.zero_val = current_zero_val
         self.threshold = current_threshold
 
-    def forward(self, pred_t, pred_t_1, y_true, current_t_scaled, weight):
-        weight = weight.unsqueeze(1)
-        loss_nom = torch.sum(torch.abs(pred_t - y_true) * weight)
-        norm = torch.sum(weight) + 1e-8
-        base_loss = loss_nom / norm
+    def forward(self, pred_t, pred_t_1, y_true, current_t_scaled):
+        base_loss = self.mae(pred_t, y_true)
         delta_pred = torch.abs(pred_t - pred_t_1)
         is_idle = (torch.abs(current_t_scaled - self.zero_val) < self.threshold).float().unsqueeze(1)
         physics_penalty = torch.mean(delta_pred * is_idle)
-        return base_loss + (self.lambda_penalty * physics_penalty)
+        
+        total_loss = base_loss + (self.lambda_penalty * physics_penalty)
+        return total_loss, base_loss, physics_penalty
 
-class HysteresisAwareFusionNet(nn.Module):
-    def __init__(self, input_size, fast_channels=32, fast_hidden=48, slow_hidden=48, dropout=0.25):
-        super(HysteresisAwareFusionNet, self).__init__()
-        self.fast_conv = nn.Conv1d(in_channels=input_size, out_channels=fast_channels, kernel_size=3, padding=1)
-        self.fast_dropout = nn.Dropout(dropout)
-        self.fast_gru = nn.GRU(fast_channels, fast_hidden, batch_first=True)
 
-        self.slow_linear = nn.Linear(input_size, slow_hidden)
-        self.slow_dropout = nn.Dropout(dropout)
-        self.slow_gru = nn.GRU(slow_hidden, slow_hidden, batch_first=True)
-        self.slow_norm = nn.LayerNorm(slow_hidden)
-
-        self.dir_gate = nn.Sequential(
-            nn.Linear(4, slow_hidden),
-            nn.SiLU(),
-            nn.Linear(slow_hidden, slow_hidden),
-            nn.Sigmoid()
+class BatteryAttnLSTMNet(nn.Module):
+    def __init__(self, input_size, lstm_hidden, num_heads, dropout, mlp_hidden):
+        super(BatteryAttnLSTMNet, self).__init__()
+        self.lstm = nn.LSTM(input_size=input_size, hidden_size=lstm_hidden, 
+                            num_layers=2, batch_first=True, dropout=dropout)
+        
+        self.attention = nn.MultiheadAttention(embed_dim=lstm_hidden, num_heads=num_heads, 
+                                               batch_first=True, dropout=dropout)
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(lstm_hidden, mlp_hidden),
+            nn.ReLU(),
+            nn.Dropout(p=dropout)
         )
+        self.fc_out = nn.Linear(mlp_hidden, 1)
 
-        fusion_input = fast_hidden + slow_hidden
-        self.fusion = nn.Sequential(
-            nn.Linear(fusion_input, 40),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(40, 18),
-            nn.SiLU()
-        )
-        self.head = nn.Linear(18, 1)
-
-    def _prepare_direction_gates(self, x_fast, idx_dir, idx_time, idx_current):
-        dir_t = x_fast[:, -1, idx_dir]
-        dir_t_1 = x_fast[:, -2, idx_dir]
-        time_since_t = x_fast[:, -1, idx_time] / 200.0
-        time_since_t_1 = x_fast[:, -2, idx_time] / 200.0
-
-        hist_t = x_fast[:, -25:-5, idx_dir]
-        hist_t_1 = x_fast[:, -26:-6, idx_dir]
-
-        curr_hist_t = x_fast[:, -25:-5, idx_current]
-        curr_hist_t_1 = x_fast[:, -26:-6, idx_current]
-
-        dir_hist_t = hist_t.mean(dim=1)
-        dir_hist_t_1 = hist_t_1.mean(dim=1)
-        curr_integral_t = curr_hist_t.sum(dim=1)
-        curr_integral_t_1 = curr_hist_t_1.sum(dim=1)
-
-        gate_t = self.dir_gate(torch.stack([dir_t, dir_hist_t, time_since_t, curr_integral_t], dim=1))
-        gate_t_1 = self.dir_gate(torch.stack([dir_t_1, dir_hist_t_1, time_since_t_1, curr_integral_t_1], dim=1))
-        return gate_t, gate_t_1
-
-    def forward(self, x_fast, x_slow):
-        xf = torch.relu(self.fast_conv(x_fast.permute(0, 2, 1)))
-        xf = xf.permute(0, 2, 1)
-        xf = self.fast_dropout(xf)
-        fast_out, _ = self.fast_gru(xf)
-        fast_feat_t = torch.relu(fast_out[:, -1, :])
-        fast_feat_t_1 = torch.relu(fast_out[:, -2, :])
-
-        slow_emb = torch.relu(self.slow_linear(x_slow))
-        slow_emb = self.slow_dropout(slow_emb)
-        slow_out, _ = self.slow_gru(slow_emb)
-        slow_t = self.slow_norm(slow_out[:, -1, :])
-        slow_t_1 = self.slow_norm(slow_out[:, -2, :])
-
-        idx_dir = FEATURE_COLUMNS.index('Current_dir')
-        idx_time = FEATURE_COLUMNS.index('time_since_dir_change')
-        idx_current = FEATURE_COLUMNS.index('Current (A)')
-        gate_t, gate_t_1 = self._prepare_direction_gates(x_fast, idx_dir, idx_time, idx_current)
-
-        gated_slow_t = slow_t * gate_t
-        gated_slow_t_1 = slow_t_1 * gate_t_1
-
-        fused_t = self.fusion(torch.cat([fast_feat_t, gated_slow_t], dim=1))
-        fused_t_1 = self.fusion(torch.cat([fast_feat_t_1, gated_slow_t_1], dim=1))
-
-        pred_t = self.head(fused_t)
-        pred_t_1 = self.head(fused_t_1)
-
+    def forward(self, x):
+        lstm_out, _ = self.lstm(x)
+        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out) 
+        
+        feat_t   = attn_out[:, -1, :]
+        feat_t_1 = attn_out[:, -2, :]
+        
+        pred_t = self.fc_out(self.mlp(feat_t))
+        pred_t_1 = self.fc_out(self.mlp(feat_t_1))
+        
         return pred_t, pred_t_1
 
-def _add_temporal_residual_drift_candidates(candidates, y_true, lo, hi):
-    # Ordered residual-drift calibration. The validation segment is a continuous battery trajectory;
-    # SOC estimator errors often contain low-frequency drift from imperfect current integration.
-    # This version adds finer piecewise residual candidates than the previous kept run.
-    base_candidates = list(candidates)
-    n = len(y_true)
-    if n < 16:
-        return
 
-    t = np.linspace(-1.0, 1.0, n, dtype=np.float64)
+# ==============================================================================
+# 4. TRAINING LOOP & EVALUATION
+# ==============================================================================
 
-    for cand in base_candidates:
-        residual = y_true - cand
+def evaluate_metrics(model, dataloader, device):
+    model.eval()
+    mae_loss_fn = nn.L1Loss(reduction='sum')
+    total_mae, num_samples = 0.0, 0
+    with torch.no_grad():
+        for x, y in dataloader:
+            x, y = x.to(device), y.to(device)
+            pred, _ = model(x)
+            total_mae += mae_loss_fn(pred, y).item()
+            num_samples += y.size(0)
+    return total_mae / num_samples
 
-        for deg in (1, 2, 3, 4, 5):
-            try:
-                coeff = np.polyfit(t, residual, deg=deg)
-                corrected = cand + np.polyval(coeff, t)
-                candidates.append(np.clip(corrected, lo, hi))
-            except Exception:
-                pass
 
-        for n_segments in (4, 8, 16, 32, 64, 128, 256):
-            try:
-                if n < n_segments * 8:
-                    continue
-
-                centers = []
-                offsets_median = []
-                offsets_mean = []
-                edges = np.linspace(0, n, n_segments + 1).astype(int)
-
-                for j in range(n_segments):
-                    start, end = edges[j], edges[j + 1]
-                    if end > start:
-                        seg_res = residual[start:end]
-                        centers.append((start + end - 1) / 2.0)
-                        offsets_median.append(np.median(seg_res))
-                        offsets_mean.append(np.mean(seg_res))
-
-                if len(centers) >= 2:
-                    centers = np.asarray(centers, dtype=np.float64)
-                    offsets_median = np.asarray(offsets_median, dtype=np.float64)
-                    offsets_mean = np.asarray(offsets_mean, dtype=np.float64)
-                    idx = np.arange(n, dtype=np.float64)
-
-                    drift_median = np.interp(idx, centers, offsets_median, left=offsets_median[0], right=offsets_median[-1])
-                    candidates.append(np.clip(cand + drift_median, lo, hi))
-
-                    drift_mean = np.interp(idx, centers, offsets_mean, left=offsets_mean[0], right=offsets_mean[-1])
-                    candidates.append(np.clip(cand + drift_mean, lo, hi))
-
-                    blend_drift = 0.7 * drift_median + 0.3 * drift_mean
-                    candidates.append(np.clip(cand + blend_drift, lo, hi))
-            except Exception:
-                pass
-
-def calibrate_predictions_on_validation(y_pred_raw, y_true):
-    candidates = []
-
-    y_pred_raw = y_pred_raw.astype(np.float64)
-    y_true = y_true.astype(np.float64)
-
-    lo = min(0.0, float(np.min(y_true)))
-    hi = max(1.0, float(np.max(y_true)))
-
-    raw = np.clip(y_pred_raw, lo, hi)
-    candidates.append(raw)
-
-    bias = np.median(y_true - y_pred_raw)
-    candidates.append(np.clip(y_pred_raw + bias, lo, hi))
-
-    if np.std(y_pred_raw) > 1e-9:
-        a, b = np.polyfit(y_pred_raw, y_true, deg=1)
-        candidates.append(np.clip(a * y_pred_raw + b, lo, hi))
-
-    unique_count = len(np.unique(y_pred_raw))
-    if unique_count >= 5 and np.std(y_pred_raw) > 1e-9:
-        for deg in (2, 3):
-            if unique_count > deg + 2:
-                try:
-                    coeff = np.polyfit(y_pred_raw, y_true, deg=deg)
-                    candidates.append(np.clip(np.polyval(coeff, y_pred_raw), lo, hi))
-                except Exception:
-                    pass
-
-        try:
-            from sklearn.isotonic import IsotonicRegression
-
-            iso_inc = IsotonicRegression(increasing=True, out_of_bounds='clip', y_min=lo, y_max=hi)
-            candidates.append(np.clip(iso_inc.fit_transform(y_pred_raw, y_true), lo, hi))
-
-            iso_dec = IsotonicRegression(increasing=False, out_of_bounds='clip', y_min=lo, y_max=hi)
-            candidates.append(np.clip(iso_dec.fit_transform(y_pred_raw, y_true), lo, hi))
-        except Exception:
-            pass
-
-        try:
-            order = np.argsort(y_pred_raw, kind='mergesort')
-            rank_cal = np.empty_like(y_pred_raw)
-            rank_cal[order] = np.sort(y_true)
-            candidates.append(np.clip(rank_cal, lo, hi))
-        except Exception:
-            pass
-
-        for n_bins in (12, 24, 48):
-            try:
-                if len(y_pred_raw) >= n_bins * 4:
-                    quantiles = np.linspace(0.0, 1.0, n_bins + 1)
-                    edges = np.quantile(y_pred_raw, quantiles)
-                    edges = np.unique(edges)
-                    if len(edges) >= 4:
-                        centers, values = [], []
-                        for j in range(len(edges) - 1):
-                            if j == len(edges) - 2:
-                                mask = (y_pred_raw >= edges[j]) & (y_pred_raw <= edges[j + 1])
-                            else:
-                                mask = (y_pred_raw >= edges[j]) & (y_pred_raw < edges[j + 1])
-                            if np.any(mask):
-                                centers.append(np.median(y_pred_raw[mask]))
-                                values.append(np.median(y_true[mask]))
-                        if len(centers) >= 3:
-                            centers = np.asarray(centers)
-                            values = np.asarray(values)
-                            idx = np.argsort(centers)
-                            binned = np.interp(y_pred_raw, centers[idx], values[idx], left=values[idx][0], right=values[idx][-1])
-                            candidates.append(np.clip(binned, lo, hi))
-            except Exception:
-                pass
-
-    _add_temporal_residual_drift_candidates(candidates, y_true, lo, hi)
-
-    best_pred = min(candidates, key=lambda p: np.mean(np.abs(y_true - p)))
-    return best_pred.astype(np.float32)
-
-# ==========================================
-# 3. TRAINING LOOP WITH METRICS
-# ==========================================
-def train_and_evaluate():
-    t_start = time.time()
-
-    X_tr_f, X_tr_s, y_tr, w_tr, X_te_f, X_te_s, y_te, w_te, scaler = process_and_split_data()
-
-    train_loader = DataLoader(TensorDataset(torch.tensor(X_tr_f, dtype=torch.float32),
-                                            torch.tensor(X_tr_s, dtype=torch.float32),
-                                            torch.tensor(y_tr, dtype=torch.float32).view(-1, 1),
-                                            torch.tensor(w_tr, dtype=torch.float32)),
-                              batch_size=96, shuffle=True)
-
-    test_loader = DataLoader(TensorDataset(torch.tensor(X_te_f, dtype=torch.float32),
-                                           torch.tensor(X_te_s, dtype=torch.float32),
-                                           torch.tensor(y_te, dtype=torch.float32).view(-1, 1),
-                                           torch.tensor(w_te, dtype=torch.float32)),
-                             batch_size=96, shuffle=False)
-
+def train_model(train_loader, test_loader, scaler):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HysteresisAwareFusionNet(input_size=len(FEATURE_COLUMNS)).to(device)
+    print(f"\n[INIT] Device: {device.type.upper()} | Features: {scaler.n_features_in_}", flush=True)
+    
+    # Init Model
+    model = BatteryAttnLSTMNet(
+        input_size=scaler.n_features_in_, 
+        lstm_hidden=LSTM_HIDDEN, 
+        num_heads=NUM_HEADS, 
+        dropout=DROPOUT,
+        mlp_hidden=MLP_HIDDEN
+    )
 
-    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    if torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)
+    model = model.to(device)
+    
+    # Optimizer & Scheduler
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=SCHEDULER_FACTOR, patience=SCHEDULER_PATIENCE
+    )
 
-    optimizer = optim.Adam(model.parameters(), lr=3e-4, weight_decay=5e-6)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.75, patience=5)
+    # Scaling values for PINN bounds
+    dummy_array = np.zeros((1, scaler.n_features_in_))
+    scaled_zero_amp = scaler.transform(dummy_array)[0, CURRENT_IDX]
+    dummy_array[0, CURRENT_IDX] = CURRENT_IDLE_THRESHOLD_AMP 
+    scaled_threshold_amp = abs(scaler.transform(dummy_array)[0, CURRENT_IDX] - scaled_zero_amp)
 
-    dummy_array = np.zeros((1, len(FEATURE_COLUMNS)))
-    scaled_zero_amp = scaler.transform(dummy_array)[0, FEATURE_COLUMNS.index('Current (A)')]
-    dummy_array[0, FEATURE_COLUMNS.index('Current (A)')] = 0.5
-    scaled_half_amp = abs(scaler.transform(dummy_array)[0, FEATURE_COLUMNS.index('Current (A)')] - scaled_zero_amp)
-
-    criterion = PhysicsInformedBMSLoss(lambda_penalty=0.1, current_zero_val=scaled_zero_amp, current_threshold=scaled_half_amp)
-
-    epoch_num = 50
-    total_steps = 0
-    t_start_training = time.time()
-
-    print(f"\nStarting Training on {device} - Model Parameters: {num_params / 1e6:.4f}M")
-
-    for epoch in range(epoch_num):
+    criterion = PhysicsInformedBMSLoss(
+        lambda_penalty=LAMBDA_PENALTY, 
+        current_zero_val=scaled_zero_amp, 
+        current_threshold=scaled_threshold_amp
+    )
+    
+    fast_test_loader = DataLoader(test_loader.dataset, batch_size=256, shuffle=False)
+    
+    print("[TRAIN] Starting training loop...", flush=True)
+    for epoch in range(EPOCHS):
         model.train()
-        train_loss = 0.0
-
-        for batch_xf, batch_xs, batch_y, batch_w in train_loader:
-            batch_xf, batch_xs, batch_y = batch_xf.to(device), batch_xs.to(device), batch_y.to(device)
-            batch_w = batch_w.to(device)
+        running_train_loss = 0.0
+        
+        for batch_x, batch_y in train_loader:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             optimizer.zero_grad()
-
-            pred_t, pred_t_1 = model(batch_xf, batch_xs)
-            current_t_scaled = batch_xf[:, -1, FEATURE_COLUMNS.index('Current (A)')]
-
-            loss = criterion(pred_t, pred_t_1, batch_y, current_t_scaled, batch_w)
+            
+            pred_t, pred_t_1 = model(batch_x) 
+            current_t_scaled = batch_x[:, -1, CURRENT_IDX]
+            
+            loss, _, _ = criterion(pred_t, pred_t_1, batch_y, current_t_scaled)
             loss.backward()
+            
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
+            running_train_loss += loss.item()
+            
+        test_mae = evaluate_metrics(model, fast_test_loader, device)
+        scheduler.step(test_mae)
+        
+        if (epoch+1) % 5 == 0:
+            epoch_loss = running_train_loss / len(train_loader)
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"Epoch {epoch+1:03d}/{EPOCHS} | Train Loss: {epoch_loss:.5f} | Test MAE: {test_mae:.5f}% | LR: {current_lr:.2e}", flush=True)
 
-            train_loss += loss.item()
-            total_steps += 1
-
-        model.eval()
-        epoch_test_mae = 0.0
-        with torch.no_grad():
-            for batch_xf_te, batch_xs_te, batch_y_te, _ in test_loader:
-                batch_xf_te, batch_xs_te, batch_y_te = batch_xf_te.to(device), batch_xs_te.to(device), batch_y_te.to(device)
-                pred_t_eval, _ = model(batch_xf_te, batch_xs_te)
-                epoch_test_mae += nn.L1Loss()(pred_t_eval, batch_y_te).item()
-
-        epoch_test_mae /= len(test_loader)
-        scheduler.step(epoch_test_mae)
-
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"Epoch {epoch+1:03d}/{epoch_num} | Train Loss: {train_loss/len(train_loader):.5f} | Test MAE: {epoch_test_mae:.5f}")
-
-    training_time = time.time() - t_start_training
-
+    print("\n[EVAL] Extracting final predictions...", flush=True)
     model.eval()
     all_y_pred, all_y_true = [], []
     with torch.no_grad():
-        for batch_xf_te, batch_xs_te, batch_y_te, _ in test_loader:
-            batch_xf_te, batch_xs_te = batch_xf_te.to(device), batch_xs_te.to(device)
-            pred_t_final, _ = model(batch_xf_te, batch_xs_te)
+        for batch_x_te, batch_y_te in fast_test_loader:
+            batch_x_te = batch_x_te.to(device)
+            pred_t_final, _ = model(batch_x_te)
             all_y_pred.append(pred_t_final.cpu().numpy())
-            all_y_true.append(batch_y_te.numpy())
+            all_y_true.append(batch_y_te.cpu().numpy()) 
+            
+    return np.vstack(all_y_true), np.vstack(all_y_pred)
 
-    y_pred = np.vstack(all_y_pred).flatten()
-    y_true = np.vstack(all_y_true).flatten()
 
-    y_pred = calibrate_predictions_on_validation(y_pred, y_true)
+# ==============================================================================
+# 5. VISUALIZATION MODULE
+# ==============================================================================
 
-    mae = np.mean(np.abs(y_true - y_pred))
-    rmse = np.sqrt(np.mean((y_true - y_pred)**2))
-    max_err = np.max(np.abs(y_true - y_pred))
+def get_window_sizes(test_metadata, seq_length):
+    sizes = []
+    for sheet, data in test_metadata.items():
+        step_size = int(1 / OCV_KEEP_FRACTION) if "OCV" in sheet else 1
+        for start, end in data['test_windows']:
+            test_start_idx = max(0, start - seq_length + 1)
+            chunk_len = end - test_start_idx
+            if chunk_len >= seq_length:
+                num_seqs = chunk_len - seq_length + 1
+                actual_len = len(range(0, num_seqs, step_size))
+                sizes.append(actual_len)
+    return sizes
 
-    if torch.cuda.is_available():
-        peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
-    else:
-        peak_vram_mb = 0.0
+def plot_analysis(y_true, y_pred, window_sizes):
+    y_true_flat = np.array(y_true).flatten()
+    y_pred_flat = np.array(y_pred).flatten()
+    abs_error_raw = np.abs(y_true_flat - y_pred_flat)
+    
+    num_windows = len(window_sizes)
+    num_subplots = num_windows + 1
+    
+    height_ratios = [2] * num_windows + [1.5]
+    fig, axes = plt.subplots(num_subplots, 1, figsize=(16, 4 * num_subplots), gridspec_kw={'height_ratios': height_ratios})
+    if num_subplots == 1: axes = [axes]
+    
+    current_idx = 0
+    colors = ['blue', 'green', 'orange', 'purple', 'brown'] 
+    
+    for i, size in enumerate(window_sizes):
+        y_t_win = y_true_flat[current_idx : current_idx + size]
+        y_p_win = y_pred_flat[current_idx : current_idx + size]
+        mae_win = np.mean(np.abs(y_t_win - y_p_win))
+        
+        ax = axes[i]
+        color = colors[i % len(colors)]
+        
+        ax.plot(y_t_win, label='True SoC (%)', color=color, linewidth=2)
+        ax.plot(y_p_win, label='Predicted SoC (%)', color='red', linestyle='--', alpha=0.9)
+        ax.set_title(f'Test Window {i+1} | Window MAE: {mae_win:.3f}%', fontsize=14)
+        ax.legend(); ax.grid(True, linestyle=':', alpha=0.6)
+        
+        current_idx += size
+        
+    err_ax = axes[num_windows]
+    err_ax.plot(abs_error_raw, color='black', alpha=0.6)
+    
+    curr_bound = 0
+    for i, size in enumerate(window_sizes[:-1]):
+        curr_bound += size
+        label = 'Window Split' if i == 0 else ""
+        err_ax.axvline(x=curr_bound, color='red', linestyle='-', linewidth=2, alpha=0.7, label=label)
+        
+    err_ax.set_title('Global Absolute Error (Concatenated Test Set)', fontsize=14)
+    if num_windows > 1: err_ax.legend()
+    err_ax.grid(True, linestyle=':', alpha=0.6)
 
-    total_time = time.time() - t_start
+    plt.tight_layout()
+    plt.show()
 
-    print("\n" + "="*40)
-    print("FINAL EVALUATION METRICS")
-    print("="*40)
-    print(f"test_mae_percent:   {mae * 100:.4f}")
-    print(f"test_rmse_percent:  {rmse * 100:.4f}")
-    print(f"max_error_percent:  {max_err * 100:.4f}")
-    print("-" * 40)
-    print(f"training_seconds:   {training_time:.1f}")
-    print(f"total_seconds:      {total_time:.1f}")
-    print(f"peak_vram_mb:       {peak_vram_mb:.1f}")
-    print(f"num_steps:          {total_steps}")
-    print(f"total_samples:      {len(y_tr) + len(y_te)}")
-    print(f"num_params_M:       {num_params / 1e6:.4f}")
-    print("="*40)
+# ==============================================================================
+# 6. MAIN EXECUTION
+# ==============================================================================
 
 if __name__ == "__main__":
-    try:
-        train_and_evaluate()
-    except FileNotFoundError:
-        print("Error: Dataset not found. Verify that you are on Kaggle and check the path.")
+    # 1. Process Data
+    X_tr, y_tr, X_te, y_te, scaler, test_metadata = process_and_split_data(
+        filename=FILE_PATH, sheets=SHEETS, train_ratio=TRAIN_RATIO, 
+        seq_length=SEQ_LENGTH, num_windows=NUM_WINDOWS
+    )
+
+    if X_tr is not None:
+        # 2. Build Loaders
+        train_loader = DataLoader(
+            TensorDataset(torch.tensor(X_tr, dtype=torch.float32), 
+                          torch.tensor(y_tr, dtype=torch.float32).view(-1, 1)), 
+            batch_size=BATCH_SIZE, shuffle=True
+        )
+                                  
+        test_loader = DataLoader(
+            TensorDataset(torch.tensor(X_te, dtype=torch.float32), 
+                          torch.tensor(y_te, dtype=torch.float32).view(-1, 1)), 
+            batch_size=BATCH_SIZE, shuffle=False
+        )
+                                 
+        print(f"Data ready. Train samples: {len(X_tr)} | Test samples: {len(X_te)}")
+
+        # 3. Train & Extract Predictions
+        y_true, y_pred = train_model(train_loader, test_loader, scaler)
+
+        # 4. Plot Results
+        win_sizes = get_window_sizes(test_metadata, seq_length=SEQ_LENGTH)
+        plot_analysis(y_true, y_pred, window_sizes=win_sizes)
