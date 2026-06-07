@@ -182,6 +182,7 @@ class BatteryAttnLSTMNet(nn.Module):
         
         return pred_t, pred_t_1
 
+current_idx
 
 # ==============================================================================
 # 4. TRAINING LOOP & EVALUATION
@@ -276,72 +277,8 @@ def train_model(train_loader, test_loader, scaler):
             
     return np.vstack(all_y_true), np.vstack(all_y_pred)
 
-
 # ==============================================================================
-# 5. VISUALIZATION MODULE
-# ==============================================================================
-
-def get_window_sizes(test_metadata, seq_length):
-    sizes = []
-    for sheet, data in test_metadata.items():
-        step_size = int(1 / OCV_KEEP_FRACTION) if "OCV" in sheet else 1
-        for start, end in data['test_windows']:
-            test_start_idx = max(0, start - seq_length + 1)
-            chunk_len = end - test_start_idx
-            if chunk_len >= seq_length:
-                num_seqs = chunk_len - seq_length + 1
-                actual_len = len(range(0, num_seqs, step_size))
-                sizes.append(actual_len)
-    return sizes
-
-def plot_analysis(y_true, y_pred, window_sizes):
-    y_true_flat = np.array(y_true).flatten()
-    y_pred_flat = np.array(y_pred).flatten()
-    abs_error_raw = np.abs(y_true_flat - y_pred_flat)
-    
-    num_windows = len(window_sizes)
-    num_subplots = num_windows + 1
-    
-    height_ratios = [2] * num_windows + [1.5]
-    fig, axes = plt.subplots(num_subplots, 1, figsize=(16, 4 * num_subplots), gridspec_kw={'height_ratios': height_ratios})
-    if num_subplots == 1: axes = [axes]
-    
-    current_idx = 0
-    colors = ['blue', 'green', 'orange', 'purple', 'brown'] 
-    
-    for i, size in enumerate(window_sizes):
-        y_t_win = y_true_flat[current_idx : current_idx + size]
-        y_p_win = y_pred_flat[current_idx : current_idx + size]
-        mae_win = np.mean(np.abs(y_t_win - y_p_win))
-        
-        ax = axes[i]
-        color = colors[i % len(colors)]
-        
-        ax.plot(y_t_win, label='True SoC (%)', color=color, linewidth=2)
-        ax.plot(y_p_win, label='Predicted SoC (%)', color='red', linestyle='--', alpha=0.9)
-        ax.set_title(f'Test Window {i+1} | Window MAE: {mae_win:.3f}%', fontsize=14)
-        ax.legend(); ax.grid(True, linestyle=':', alpha=0.6)
-        
-        current_idx += size
-        
-    err_ax = axes[num_windows]
-    err_ax.plot(abs_error_raw, color='black', alpha=0.6)
-    
-    curr_bound = 0
-    for i, size in enumerate(window_sizes[:-1]):
-        curr_bound += size
-        label = 'Window Split' if i == 0 else ""
-        err_ax.axvline(x=curr_bound, color='red', linestyle='-', linewidth=2, alpha=0.7, label=label)
-        
-    err_ax.set_title('Global Absolute Error (Concatenated Test Set)', fontsize=14)
-    if num_windows > 1: err_ax.legend()
-    err_ax.grid(True, linestyle=':', alpha=0.6)
-
-    plt.tight_layout()
-    plt.show()
-
-# ==============================================================================
-# 6. MAIN EXECUTION
+# 5. MAIN EXECUTION
 # ==============================================================================
 
 if __name__ == "__main__":
@@ -369,7 +306,3 @@ if __name__ == "__main__":
 
         # 3. Train & Extract Predictions
         y_true, y_pred = train_model(train_loader, test_loader, scaler)
-
-        # 4. Plot Results
-        win_sizes = get_window_sizes(test_metadata, seq_length=SEQ_LENGTH)
-        plot_analysis(y_true, y_pred, window_sizes=win_sizes)
