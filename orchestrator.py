@@ -64,19 +64,33 @@ def run_bash(command):
 # ==========================================
 def run_kaggle_pipeline():
     """Pushes code to Kaggle for training and waits for the end of training log"""
-    run_bash("kaggle kernels push -p . --accelerator NvidiaTeslaT4")
+    print("Pushing to Kaggle...")
+    push_output = run_bash("kaggle kernels push -p . --accelerator NvidiaTeslaT4")
     
-    print("Training in progress")
+    # If the push itself fails with a 500, we should print it for debugging
+    if "500" in push_output or "error" in push_output.lower():
+        print(f"[Kaggle Push Warning]: {push_output.strip()}")
+    
+    print("Training in progress...")
     while True:
         status_output = run_bash(f"kaggle kernels status {KAGGLE_USER_SLUG}")
         print(f"[Kaggle API] {status_output.strip()}")
         
-        # Checks run status
-        if "complete" in status_output.lower() or "error" in status_output.lower() or "cancel" in status_output.lower():
+        status_lower = status_output.lower()
+        
+        # 1. Handle API hiccups without breaking the loop
+        if "500" in status_lower or "503" in status_lower or "internal server error" in status_lower:
+            print("Kaggle API hiccup. Retrying in 30 seconds...")
+            time.sleep(30)
+            continue
+            
+        # 2. Look specifically for Kaggle's exact status string format
+        if 'status "complete"' in status_lower or 'status "error"' in status_lower or 'status "cancel"' in status_lower:
             break
+            
         time.sleep(30)
         
-    print("Log download")
+    print("Log download...")
     run_bash("mkdir -p kaggle_output") # Creates log directory if it does not exist
     run_bash("rm -f ./kaggle_output/autoresearch-battery-soc.log") # Cleans log directory
     run_bash(f"kaggle kernels output {KAGGLE_USER_SLUG} -p ./kaggle_output") # Downloads new log
