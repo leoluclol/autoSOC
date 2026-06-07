@@ -27,3 +27,9 @@ I reviewed the logs and saw the model consistently failed to improve, so I intro
 
 
 
+--- Iteration 4 ---
+From the previous iterations, it seems the model encountered an OOM error. Iteration 3 tried to address this by reducing `LSTM_HIDDEN` and `MLP_HIDDEN`, and slightly increasing `DROPOUT`, but this wasn't enough to prevent OOM issues. To further mitigate memory constraints, I'll reduce the `SEQ_LENGTH`, which will decrease the size of each input batch, and further reduce `BATCH_SIZE`, aiming to fit within VRAM limits while training effectively. 
+
+Here's the proposed change:
+
+

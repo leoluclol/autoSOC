@@ -16,15 +16,14 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 # --- Data Parameters ---
 TRAIN_RATIO = 0.8
 NUM_WINDOWS = 3                # Number of distinct test chunks to carve out
-SEQ_LENGTH = 300               # Number of historical timesteps per sequence
-BATCH_SIZE = 128               # Batch size for DataLoaders
-
+SEQ_LENGTH = 200               # Reduced Number of historical timesteps per sequence
+BATCH_SIZE = 32                # Further reduced Batch size for DataLoaders to prevent OOM
 
 # --- Model Architecture ---
-LSTM_HIDDEN = 64               # Hidden dimensions for the LSTM
+LSTM_HIDDEN = 48               # Further reduced Hidden dimensions for the LSTM
 NUM_HEADS = 4                  # Self-Attention heads (LSTM_HIDDEN must be divisible by this)
-DROPOUT = 0.3                  # Dropout probability for regularization
-MLP_HIDDEN = 32                # Hidden dimension for the dense layer post-attention
+DROPOUT = 0.35                 # Dropout probability for regularization
+MLP_HIDDEN = 24                # Reduced Hidden dimension for the dense layer post-attention
 
 # --- Training Parameters ---
 EPOCHS = 150                   # Total training epochs
@@ -36,13 +35,6 @@ SCHEDULER_FACTOR = 0.75        # Factor to multiply LR by on plateau
 # --- PINN (Physics-Informed) Configuration ---
 LAMBDA_PENALTY = 0.3           # Weight of the physics penalty against the base MAE loss
 CURRENT_IDLE_THRESHOLD_AMP = 0.5 # Amps threshold below which battery is considered "idle"
-
-# --- Feature Configuration ---
-COLUMNS = ['Test_Time(s)', 'Voltage(V)', 'Current(A)', 'dV/dt(V/s)', 'Temperature (C)_1', 'SoC (%)']
-FEATURES = ['Voltage(V)', 'Current(A)', 'dV/dt(V/s)', 'Temperature (C)_1']
-TARGET = 'SoC (%)'
-CURRENT_IDX = FEATURES.index('Current(A)') # Automatically find the index for Current(A)
-
 
 # ========= DO NOT MODIFY
 FILE_PATH = '/kaggle/input/datasets/leonardoluchini/calce-a123-dynamic-raw-joined/CALCE-dataset-1Hz.xlsx'
